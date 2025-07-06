@@ -9,7 +9,8 @@ from flask import jsonify
 
 from langchain.agents import initialize_agent, Tool
 from langchain.agents.agent_types import AgentType
-from langchain.llms import OpenAI
+from langchain_community.llms import OpenAI
+
 
 from proxy_n_toxic.corrupt_request import add_toxic, remove_toxic
 
