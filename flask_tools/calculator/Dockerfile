@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y curl && rm -rf /vars/lib/apt/lists/*
 RUN pip install --upgrade pip
 RUN pip install flask
 
-
+COPY . . 
 
 
 EXPOSE 5004
