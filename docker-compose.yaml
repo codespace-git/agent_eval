@@ -1,0 +1,72 @@
+version: '2.4'
+
+services:
+  toxiproxy:
+    build: 
+      context: .
+      dockerfile: toxiproxy.Dockerfile
+  search_tool:
+    build: ./flask_tools/serp
+   
+  weather_tool:
+    build: ./flask_tools/openweather
+   
+  
+  movie_tool:
+    build: ./flask_tools/tmdb
+   
+  
+  calendar_tool:
+    build: ./flask_tools/calendar
+   
+  
+  calculator_tool:
+    build: ./flask_tools/calculator
+   
+    
+  message_tool:
+    build: ./flask_tools/message
+   
+  
+  translator_tool:
+    build: ./flask_tools/translator
+  
+  
+  setup_proxy:
+    build: ./agent/proxy_n_toxic
+    depends_on:
+      toxiproxy:
+        condition: service_healthy
+      search_tool: 
+        condition: service_healthy
+      weather_tool:
+        condition: service_healthy
+      movie_tool:
+        condition: service_healthy
+      calendar_tool:
+        condition: service_healthy
+      calculator_tool:
+        condition: service_healthy
+      message_tool:
+        condition: service_healthy
+      translator_tool:
+        condition: service_healthy
+    restart: "no"
+  
+  agent:
+    build: ./agent
+    depends_on:
+      - setup_proxy
+    env_file:
+      - .env
+    
+     
+    
+
+  
+
+  
+    
+
+
+  
