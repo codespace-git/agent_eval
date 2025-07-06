@@ -34,9 +34,9 @@ PROXY={
     "translator":{"proxy":"translator_proxy",
                  "url":"6006"},
     "calculator":{"proxy":"calculator_proxy",
-                 "url":"6005"},
+                 "url":"6004"},
     "message":{"proxy":"message_proxy",
-              "url":"6004"}
+              "url":"6005"}
 }
 
 

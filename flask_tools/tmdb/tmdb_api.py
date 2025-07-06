@@ -13,15 +13,13 @@ with open("movies.json", "r") as f :
 def search_movie():
     if random.random() < 0.1:
         return jsonify({"status": "error", "message": "Internal Server Error"}), 500
-    if random.random() < 0.05:
-        time.sleep(5)
     response = request.args
-    query = response.get("query", "")
+    query = response.get("query","")
     language = response.get("language", "en")
     page = int(response.get("page", 1))
     per_page = int(response.get("per_page", 2))  
 
-    if not query:
+    if not query or not isinstance(query,str):
         return jsonify({"status": "fail","message": "Missing required parameter: query"}), 400
 
    

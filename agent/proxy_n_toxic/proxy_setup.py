@@ -26,12 +26,12 @@ calendar_proxy = toxiproxy.create_proxy(
 message_proxy = toxiproxy.create_proxy(
     name = "message_proxy",
     listen = "0.0.0.0:6005",
-    upstream = "calendar_tool:5005"
+    upstream = "message_tool:5005"
 )
 calculator_proxy = toxiproxy.create_proxy(
     name = "calculator_proxy",
     listen = "0.0.0.0:6004",
-    upstream = "calendar_tool:5004"
+    upstream = "calculator_tool:5004"
 )
 translator_proxy=toxiproxy.create_proxy(
     name="translator_proxy",
