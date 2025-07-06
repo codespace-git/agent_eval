@@ -1,7 +1,7 @@
 
 FROM python:3.13.5-slim
 
-# Environment setup
+
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
