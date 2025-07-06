@@ -3,7 +3,7 @@ import json
 import random
 import logging
 import requests
-import time
+
 
 from flask import jsonify
 
