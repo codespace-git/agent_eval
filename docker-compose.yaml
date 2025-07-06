@@ -1,10 +1,8 @@
-version: '2.4'
+
 
 services:
   toxiproxy:
-    build: 
-      context: .
-      dockerfile: toxiproxy.Dockerfile
+    image: ghcr.io/shopify/toxiproxy:2.12.0
   search_tool:
     build: ./flask_tools/serp
    
@@ -35,8 +33,8 @@ services:
   setup_proxy:
     build: ./agent/proxy_n_toxic
     depends_on:
-      toxiproxy:
-        condition: service_healthy
+      toxiproxy: 
+        condition: service_started
       search_tool: 
         condition: service_healthy
       weather_tool:

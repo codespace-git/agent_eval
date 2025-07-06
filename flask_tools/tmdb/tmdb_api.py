@@ -5,7 +5,7 @@ import time
 
 app = Flask(__name__)
 
-with open("movie_list.json", "r") as f :
+with open("movies.json", "r") as f :
     MOVIES = json.load(f)
 
 
@@ -14,7 +14,7 @@ def search_movie():
     if random.random() < 0.1:
         return jsonify({"status": "error", "message": "Internal Server Error"}), 500
     if random.random() < 0.05:
-        time.sleep(10)
+        time.sleep(5)
     response = request.args
     query = response.get("query", "")
     language = response.get("language", "en")

@@ -7,10 +7,14 @@ app = Flask(__name__)
 
 @app.route("/translate", methods=["POST"])
 def translate():
+    if random.random()<0.1:
+        return jsonify({"error":"internal servor error"}),500
     if random.random() < 0.05:
-        time.sleep(10)  
+        time.sleep(5)  
 
     data = request.get_json()
+    if not data:
+        return jsonify({"error":"no data found"}),400
     text = data.get("text")
     source = data.get("source_language", "auto")
     target = data.get("target_language")

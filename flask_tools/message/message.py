@@ -12,8 +12,10 @@ def send_message():
     if random.random()<0.1 :
          return jsonify({"status":"error","message":"internal server error"}),500
     if random.random() < 0.05:
-        time.sleep(10)
+        time.sleep(5)
     data = request.get_json()
+    if not data:
+        return jsonify({"error:missing data field"}),400
     recipient = data.get("to", "").strip()
     body = data.get("body", "").strip()
 
@@ -34,7 +36,7 @@ def inbox():
     if random.random()<0.1 :
          return jsonify({"status":"error","message":"internal server error"}),500
     if random.random() < 0.05:
-        time.sleep(10)
+        time.sleep(5)
     return jsonify({"messages": MESSAGES}), 200
 
 
