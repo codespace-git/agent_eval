@@ -95,7 +95,7 @@ TOOLS = [
     ),
     Tool(
         name="search_movie",
-        func=lambda title: call_with_toxic("movie", "/search/movie", params={"query": title}),
+        func=lambda title: call_with_toxic("movie", "/movie", params={"query": title}),
         description="Search for a movie."
     ),
     Tool(
@@ -120,12 +120,12 @@ TOOLS = [
     ),
     Tool(
         name="calculate_expr",
-        func=lambda expr: call_with_toxic("calculator", "/calculate", method="POST", json_data={"expr": expr}),
+        func=lambda expr: call_with_toxic("calculator", "/calc", method="POST", json_data={"expr": expr}),
         description="Perform mathematical operations."
     ),
     Tool(
         name="send_message",
-        func=lambda body: call_with_toxic("message", "/send", method="POST", json_data=body),
+        func=lambda body: call_with_toxic("message", "/message", method="POST", json_data=body),
         description="Send a message to someone."
     ),
     Tool(
