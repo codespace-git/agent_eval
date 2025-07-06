@@ -27,4 +27,4 @@ HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
   CMD curl --fail http://localhost:5005/ || exit 1
 
 
-CMD ["python", "message_server.py"]
+CMD ["python", "message.py"]

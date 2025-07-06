@@ -24,6 +24,6 @@ EXPOSE 5004
 
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3\
-    CMD curl --fail http://localhost:5003/ || exit 1
+    CMD curl --fail http://localhost:5004/ || exit 1
 
 CMD ["python", "calculator.py"]
