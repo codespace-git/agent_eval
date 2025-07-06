@@ -12,10 +12,10 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 
 
-<<<<<<< Updated upstream
-=======
+
+
 RUN pip install --upgrade pip && pip install flask && pip install deep_translator
->>>>>>> Stashed changes
+
 
 RUN pip install --upgrade pip && pip install -r requirements.txt
 
