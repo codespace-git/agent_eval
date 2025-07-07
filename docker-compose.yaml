@@ -57,7 +57,7 @@ services:
       proxy_mgr:
         condition: service_started
     volumes:
-        - ./start : /app/start
+        - ./state : /app/state
     env_file:
       - .env
     
