@@ -23,7 +23,7 @@ logging.basicConfig(
 
 
 
-TOXIC_PROB = 0.01
+
 PROXY ={
     "search": "6000",
     "weather":"6001",
@@ -37,7 +37,7 @@ PROXY ={
 def call_with_toxic(tool_name, endpoint, method="GET", params=None, json_data=None):
     proxy = PROXY[tool_name]
     url = f"http://toxiproxy:{proxy}{endpoint}"
-    injected = False
+   
 
     
 
@@ -67,11 +67,8 @@ def call_with_toxic(tool_name, endpoint, method="GET", params=None, json_data=No
         logging.error(f"{tool_name} failed: {str(e)}")
         return jsonify({"error": str(e)})
 
-    finally:
-        if injected:
-            proxy["proxy"].remove_toxic('timeout_toxic')
-            logging.info(f"Removed toxic for {tool_name}")
-            injected = False
+
+            
             
     
 
@@ -158,7 +155,9 @@ for i, item in enumerate(prompts):
         logging.error(json.dumps({"prompt":prompt,
                 "error":str(e)},ensure_ascii=False))
     finally:
-        if count%10==0:
+        if (count+1)%10==0:
+            random.shuffle(prompts)
+        elif count%10==0:
             with sqlite3.connect("state/state.db")as conn:
                 cursor = conn.cursor()
                 cursor.execute("UPDATE control SET count = -1 WHERE id = 1")
