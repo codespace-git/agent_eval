@@ -19,13 +19,13 @@ def search_movie():
     page = int(response.get("page", 1))
     per_page = int(response.get("per_page", 2))  
 
-    if not query or not isinstance(query,str):
+    if not query :
         return jsonify({"status": "fail","message": "Missing required parameter: query"}), 400
 
    
     filtered = [
         movie for movie in MOVIES
-        if query.lower() in movie["name"].lower() and query.lower() in movie["original_name"].lower()
+        if query.lower() in movie["name"].lower() 
     ]
 
    

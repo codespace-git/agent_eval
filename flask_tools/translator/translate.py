@@ -13,9 +13,9 @@ def translate():
     data = request.get_json()
     if not data:
         return jsonify({"error":"no data found"}),400
-    text = data.get("text")
+    text = data.get("text","")
     source = data.get("source_language", "auto")
-    target = data.get("target_language")
+    target = data.get("target_language","english")
 
     if not text or not target:
         return jsonify({"error": "Missing text or target language"}), 404

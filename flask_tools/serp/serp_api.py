@@ -13,7 +13,7 @@ def serp_mock():
     if not query:
         return jsonify({"error": "Missing query parameter 'q'"}), 400
 
-    # Generate mock organic results based on the query
+    
     mock_results = []
     for i in range(1, random.randint(2, 5)):
         mock_results.append({

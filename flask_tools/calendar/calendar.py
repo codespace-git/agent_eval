@@ -67,11 +67,11 @@ def create_event():
 def delete_event():
     if random.random()<0.1 :
          return jsonify({"status":"error","message":"internal server error"}),500
-    if random.random() < 0.05:
-        time.sleep(5)
-    date = request.get_json().get("date","")
-    if not date :
+    
+    data = request.get_json()
+    if not data :
         return jsonify({"status":"error","message":"invalid date entry"}),400
+    date = data.get("date","")
     global EVENTS
     before = len(EVENTS)
     EVENTS = [e for e in EVENTS if e["date"] != date]
