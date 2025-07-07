@@ -32,11 +32,11 @@ func main() {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		log.Fatalf("DB error: %v,exiting now", err)
-		defer db.Close()
-		return
 	}
+	defer db.Close()
 	
 	createTable(db)
+}
 	
 	for _, cfg := range proxyConfig {
 		_, err := client.CreateProxy(cfg.Name, cfg.Listen, cfg.Upstream)
@@ -66,7 +66,7 @@ func main() {
 }
 
 func createTable(db *sql.DB) {
-	db.Exec(`
+	_, err := db.Exec(`
 		CREATE TABLE control (
 			id INTEGER PRIMARY KEY,
 			count INTEGER ,
@@ -74,6 +74,9 @@ func createTable(db *sql.DB) {
 		);
 		INSERT OR IGNORE INTO control (id, count, limit) VALUES (1, 0, 0);
 	`)
+	if err!=nil{
+		log.Printf("error creating table: %v",err)
+	
 }
 
 func getState(db *sql.DB) (int, int) {
@@ -81,7 +84,7 @@ func getState(db *sql.DB) (int, int) {
 	err := db.QueryRow("SELECT count, limit FROM control WHERE id = 1").Scan(&count, &limit)
 	if err != nil {
 		log.Printf("DB fetch error: %v", err)
-		continue 
+		return 0,0
 	}
 	return count, limit
 }
