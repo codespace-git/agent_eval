@@ -32,7 +32,7 @@ def serp_mock():
             "engine": "google",
             "q": query
         },
-        "organic_results": mock_results
+        "results": mock_results
     }
 
     return jsonify(response),200
