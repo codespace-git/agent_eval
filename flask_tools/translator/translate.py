@@ -9,8 +9,6 @@ app = Flask(__name__)
 def translate():
     if random.random()<0.1:
         return jsonify({"error":"internal servor error"}),500
-    if random.random() < 0.05:
-        time.sleep(5)  
 
     data = request.get_json()
     if not data:

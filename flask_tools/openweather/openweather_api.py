@@ -18,11 +18,10 @@ WEATHER_OPTIONS = [
 def weather_mock():
     if random.random()<0.1 :
          return jsonify({"status":"error","message":"internal server error"}),500
-    if random.random() < 0.05:
-        time.sleep(5)
     city = request.args.get("q", "Unknown City")
     if not city :
         return jsonify({"message":"invalid request"}),400
+    global WEATHER_OPTIONS 
     random_weather = random.choice(WEATHER_OPTIONS)
     
     mock_response = {

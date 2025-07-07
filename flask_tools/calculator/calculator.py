@@ -9,8 +9,7 @@ app = Flask(__name__)
 def calculator():
     if random.random() < 0.1:
         return jsonify({"error":"server internal error"}),500
-    if random.random() < 0.05:
-        time.sleep(5)
+    
     data = request.get_json()
     if not data:
         return jsonify({"error":"data not found"}),400

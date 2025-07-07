@@ -2,3 +2,5 @@ flask
 requests
 langchain
 openai
+langchain-openai
+toxiproxy
