@@ -3,4 +3,5 @@ requests
 langchain
 openai
 langchain-openai
-toxiproxy
+toxiproxy-python
+
