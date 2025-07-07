@@ -4,14 +4,13 @@ import (
 	"database/sql"
 	"log"
 	"time"
-
 	"github.com/Shopify/toxiproxy/v2/client"
 	_ "modernc.org/sqlite"
 )
 
 const (
 	dbPath  = "./state/state.db"
-	baseURL = "http://toxiproxy:8474"
+	base_client_URL = "http://toxiproxy:8474"
 )
 
 var proxyConfig = []struct {
@@ -29,32 +28,33 @@ var proxyConfig = []struct {
 }
 
 func main() {
-	client := client.NewClient(baseURL)
+	client := client.NewClient(base_client_URL)
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
-		log.Fatalf("DB error: %v", err)
+		log.Fatalf("DB error: %v,exiting now", err)
+		defer db.Close()
+		return
 	}
-	defer db.Close()
-
+	
 	createTable(db)
-
 	
 	for _, cfg := range proxyConfig {
 		_, err := client.CreateProxy(cfg.Name, cfg.Listen, cfg.Upstream)
 		if err != nil && !client.IsConflict(err) {
 			log.Printf("Failed to create proxy %s: %v", cfg.Name, err)
+			continue
 		}
 	}
 
 	for {
-		time.Sleep(1 * time.Second)
+		time.Sleep(time.Second)
 
 		count, limit := getState(db)
 
 		switch {
 		case count==limit:
 			deleteProxies(client)
-			log.Println("All prompts processed. Cleaned up.")
+			log.Println("service no longer required,exiting now")
 			return 
 		case count%10 == 9:
 			injectToxics(client)
@@ -67,10 +67,10 @@ func main() {
 
 func createTable(db *sql.DB) {
 	db.Exec(`
-		CREATE TABLE IF NOT EXISTS control (
+		CREATE TABLE control (
 			id INTEGER PRIMARY KEY,
-			count INTEGER DEFAULT 0,
-			limit INTEGER DEFAULT 0
+			count INTEGER ,
+			limit INTEGER 
 		);
 		INSERT OR IGNORE INTO control (id, count, limit) VALUES (1, 0, 0);
 	`)
@@ -81,6 +81,7 @@ func getState(db *sql.DB) (int, int) {
 	err := db.QueryRow("SELECT count, limit FROM control WHERE id = 1").Scan(&count, &limit)
 	if err != nil {
 		log.Printf("DB fetch error: %v", err)
+		continue 
 	}
 	return count, limit
 }
@@ -118,6 +119,7 @@ func deleteProxies(client *client.Client) {
 		err := client.DeleteProxy(cfg.Name)
 		if err != nil {
 			log.Printf("Failed to delete proxy %s: %v", cfg.Name, err)
+			continue 
 		} else {
 			log.Printf("Deleted proxy %s", cfg.Name)
 		}
