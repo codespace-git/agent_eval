@@ -1,4 +1,4 @@
-module toxiproxy
+module Toxiproxy
 
 go 1.24
 
