@@ -16,7 +16,6 @@ def generate_id():
 def list_events():
     if random.random()<0.1 :
         return jsonify({"status":"error","message":"internal server error"}),500
-    
     date = request.args.get("date","")
     if date:
         try:
@@ -36,8 +35,6 @@ def list_events():
 def create_event():
     if random.random()<0.1 :
          return jsonify({"status":"error","message":"internal server error"}),500
-    if random.random() < 0.05:
-        time.sleep(5)
     data = request.get_json()
     if not data:
         return jsonify({"error":"data not found"}),400
