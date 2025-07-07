@@ -29,7 +29,10 @@ services:
   translator_tool:
     build: ./flask_tools/translator
   
-  
+  proxy_mgr:
+    build: ./Toxiproxy
+    volumes:
+      - ./state : /app/state 
   
   
   agent:
@@ -51,6 +54,10 @@ services:
         condition: service_healthy
       translator_tool:
         condition: service_healthy  
+      proxy_mgr:
+        condition: service_started
+      volumes:
+        - ./start : /app/start
     env_file:
       - .env
     
