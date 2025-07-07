@@ -30,8 +30,10 @@ services:
     build: ./flask_tools/translator
   
   
-  setup_proxy:
-    build: ./agent/proxy_n_toxic
+  
+  
+  agent:
+    build: ./agent
     depends_on:
       toxiproxy: 
         condition: service_started
@@ -48,13 +50,7 @@ services:
       message_tool:
         condition: service_healthy
       translator_tool:
-        condition: service_healthy
-    restart: "no"
-  
-  agent:
-    build: ./agent
-    depends_on:
-      - setup_proxy
+        condition: service_healthy  
     env_file:
       - .env
     
