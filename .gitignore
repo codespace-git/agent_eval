@@ -1,3 +1,4 @@
 .env
-state/*
+state/state.db
 logs/*
+!logs/.gitkeep
