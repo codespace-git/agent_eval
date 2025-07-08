@@ -1,5 +1,3 @@
-
-
 services:
   toxiproxy:
     image: ghcr.io/shopify/toxiproxy:2.12.0
@@ -28,13 +26,11 @@ services:
   
   translator_tool:
     build: ./flask_tools/translator
-  
   proxy_mgr:
     build: ./Toxiproxy
     volumes:
       - ./state:/app/state 
-  
-  
+
   agent:
     build: ./agent
     depends_on:
@@ -60,8 +56,7 @@ services:
         - ./state:/app/state
         - ./logs:/app/logs
     env_file:
-      - .env
-    
+      - .env 
      
     
 
