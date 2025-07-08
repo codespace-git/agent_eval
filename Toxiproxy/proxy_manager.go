@@ -4,13 +4,13 @@ import (
 	"database/sql"
 	"log"
 	"time"
-	"github.com/Shopify/toxiproxy/v2/client"
+	toxiproxy "github.com/Shopify/toxiproxy/v2/client"
 	_ "modernc.org/sqlite"
 )
 
 const (
 	dbPath  = "./state/state.db"
-	base_client_URL = "http://toxiproxy:8474"
+	base_client_URL = "toxiproxy:8474"
 )
 
 var proxyConfig = []struct {
@@ -28,7 +28,8 @@ var proxyConfig = []struct {
 }
 
 func main() {
-	client := client.NewClient(base_client_URL)
+	
+	toxiClient := toxiproxy.NewClient(base_client_URL)
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		log.Fatalf("DB error: %v,exiting now", err)
@@ -36,30 +37,101 @@ func main() {
 	defer db.Close()
 	
 	createTable(db)
-}
-	
-	for _, cfg := range proxyConfig {
-		_, err := client.CreateProxy(cfg.Name, cfg.Listen, cfg.Upstream)
-		if err != nil && !client.IsConflict(err) {
-			log.Printf("Failed to create proxy %s: %v", cfg.Name, err)
-			continue
-		}
+
+	var (
+		searchProxy     *toxiproxy.Proxy
+		weatherProxy    *toxiproxy.Proxy
+		movieProxy      *toxiproxy.Proxy
+		calendarProxy   *toxiproxy.Proxy
+		calculatorProxy *toxiproxy.Proxy
+		messageProxy    *toxiproxy.Proxy
+		translatorProxy *toxiproxy.Proxy
+	)
+
+	for{
+		
+	searchProxy, err = toxiClient.CreateProxy("search_proxy", "0.0.0.0:6000", "search_tool:5000")
+	if err != nil {
+		log.Printf("search_proxy failed: %v", err)
+		continue
 	}
+	break
+}
+	for{
+		
+	weatherProxy, err = toxiClient.CreateProxy("weather_proxy", "0.0.0.0:6001", "weather_tool:5001")
+	if err != nil {
+		log.Printf("weather_proxy failed: %v", err)
+		continue
+	}
+	break
+	}
+	for{
+		
+	movieProxy, err = toxiClient.CreateProxy("movie_proxy", "0.0.0.0:6002", "movie_tool:5002")
+	if err != nil {
+		log.Printf("movie_proxy failed: %v", err)
+		continue
+	}
+	break
+}
+	for{
+	calendarProxy, err = toxiClient.CreateProxy("calendar_proxy", "0.0.0.0:6003", "calendar_tool:5003")
+	if err != nil {
+		log.Printf("calendar_proxy failed: %v", err)
+		continue
+	}
+	break
+	}
+	for{
+		
+	calculatorProxy, err = toxiClient.CreateProxy("calculator_proxy", "0.0.0.0:6004", "calculator_tool:5004")
+	if err != nil {
+		log.Printf("calculator_proxy failed: %v", err)
+		continue
+	}
+	break
+}
+	for{
+		
+	messageProxy, err = toxiClient.CreateProxy("message_proxy", "0.0.0.0:6005", "message_tool:5005")
+	if err != nil {
+		log.Printf("message_proxy failed: %v", err)
+		continue
+	}
+	break
+}
+
+	for{
+		
+		translatorProxy, err = toxiClient.CreateProxy("translator_proxy", "0.0.0.0:6006", "translator_tool:5006")
+	if err != nil {
+		log.Printf("translator_proxy failed: %v", err)
+		continue
+	}
+	break
+}
+	_ = searchProxy
+	_ = weatherProxy
+	_ = movieProxy
+	_ = calendarProxy
+	_ = calculatorProxy
+	_ = messageProxy
+	_ = translatorProxy
 
 	for {
-
 		count, limit := getState(db)
 
 		switch {
 		case count==limit:
-			deleteProxies(client)
+			deleteProxies(toxiClient)
 			log.Println("service no longer required,exiting now")
 			return 
 		case count%10 == 9:
 			time.Sleep(time.Second)
-			injectToxics(client)
+			injectToxics(toxiClient)
 		case count == -1:
-			removeToxics(client)
+			removeToxics(toxiClient)
 		
 		}
 	}
@@ -67,8 +139,8 @@ func main() {
 
 func createTable(db *sql.DB) {
 	for{
-	_, err := db.Exec(`
-		CREATE TABLE control (
+	_, err := db.Exec(`m
+		CREATE TABLE IF NOT EXISTS control (
 			id INTEGER PRIMARY KEY,
 			count INTEGER ,
 			limit INTEGER 
@@ -81,11 +153,12 @@ func createTable(db *sql.DB) {
 		continue
 	}
 	
-	if err == nil{
 		log.Printf("table created")
-	}
+		break
 	
+  }
 }
+
 
 func getState(db *sql.DB) (int, int) {
 	var count, limit int
@@ -97,42 +170,39 @@ func getState(db *sql.DB) (int, int) {
 	return count, limit
 }
 
-func injectToxics(client *client.Client) {
+func injectToxics(client *toxiproxy.Client) {
 	for _, cfg := range proxyConfig {
 		proxy, err := client.Proxy(cfg.Name)
 		if err != nil {
 			log.Printf("Error fetching proxy %s: %v", cfg.Name, err)
 			continue
 		}
-		_, err = proxy.AddToxic("timeout_toxic", "timeout", "downstream", 1.0, client.Attributes{"timeout": 5000})
-		if err == nil {
-			log.Printf("Injected toxic into %s", cfg.Name)
-		}
+		proxy.AddToxic("timeout_toxic", "timeout", "downstream", 1.0, toxiproxy.Attributes{"timeout": 5000})
 	}
 }
 
-func removeToxics(client *client.Client) {
+func removeToxics(client *toxiproxy.Client) {
 	for _, cfg := range proxyConfig {
 		proxy, err := client.Proxy(cfg.Name)
 		if err != nil {
 			log.Printf("Error fetching proxy %s for toxic removal: %v", cfg.Name, err)
 			continue
 		}
-		err = proxy.RemoveToxic("timeout_toxic")
-		if err == nil {
-			log.Printf("Removed toxic from %s", cfg.Name)
+		proxy.RemoveToxic("timeout_toxic")
 		}
 	}
-}
 
-func deleteProxies(client *client.Client) {
+
+func deleteProxies(client *toxiproxy.Client) {
 	for _, cfg := range proxyConfig {
-		err := client.DeleteProxy(cfg.Name)
+	
+		proxy, err := client.Proxy(cfg.Name)
 		if err != nil {
-			log.Printf("Failed to delete proxy %s: %v", cfg.Name, err)
-			continue 
-		} else {
-			log.Printf("Deleted proxy %s", cfg.Name)
+			log.Printf("Error fetching proxy %s for toxic removal: %v", cfg.Name, err)
+			continue
 		}
+		proxy.Delete()
+		log.Printf("Deleted proxy %s", cfg.Name)
+		
 	}
 }
