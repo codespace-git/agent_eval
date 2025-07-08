@@ -1,2 +1,2 @@
 .env
-state.db
+state/state.db
