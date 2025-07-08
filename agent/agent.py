@@ -144,7 +144,7 @@ def response_handler(agent,prompts,prompt,count):
             "status": "agent_error"
         }, indent=2, ensure_ascii=False))
     finally:
-        if (count+1)%10==0:
+        if count%10==9:
             random.shuffle(prompts)
         if count%10==0:
             with sqlite3.connect("state/state.db")as conn:
