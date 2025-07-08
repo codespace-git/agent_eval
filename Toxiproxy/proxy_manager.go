@@ -28,7 +28,7 @@ var proxyConfig = []struct {
 }
 
 func main() {
-	client := client.NewClient(base_client_URL)
+	toxiclient := client.NewClient(base_client_URL)
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		log.Fatalf("DB error: %v,exiting now", err)
@@ -39,7 +39,7 @@ func main() {
 
 	
 	for _, cfg := range proxyConfig {
-		_, err := client.CreateProxy(cfg.Name, cfg.Listen, cfg.Upstream)
+		_, err := toxiclient.CreateProxy(cfg.Name, cfg.Listen, cfg.Upstream)
 		if err != nil && !client.IsConflict(err) {
 			log.Printf("Failed to create proxy %s: %v", cfg.Name, err)
 			continue
@@ -52,14 +52,14 @@ func main() {
 
 		switch {
 		case count==limit:
-			deleteProxies(client)
+			deleteProxies(toxiclient)
 			log.Println("service no longer required,exiting now")
 			return 
 		case count%10 == 9:
 			time.Sleep(time.Second)
-			injectToxics(client)
+			injectToxics(toxiclient)
 		case count == -1:
-			removeToxics(client)
+			removeToxics(toxiclient)
 		
 		}
 	}
@@ -81,12 +81,13 @@ func createTable(db *sql.DB) {
 		continue
 	}
 	
-	if err == nil{
+	
 		log.Printf("table created")
 		break
-	}
 	
+  }
 }
+
 
 func getState(db *sql.DB) (int, int) {
 	var count, limit int
@@ -98,9 +99,9 @@ func getState(db *sql.DB) (int, int) {
 	return count, limit
 }
 
-func injectToxics(client *client.Client) {
+func injectToxics(toxiclient *client.Client) {
 	for _, cfg := range proxyConfig {
-		proxy, err := client.Proxy(cfg.Name)
+		proxy, err := toxiclient.Proxy(cfg.Name)
 		if err != nil {
 			log.Printf("Error fetching proxy %s: %v", cfg.Name, err)
 			continue
@@ -112,9 +113,9 @@ func injectToxics(client *client.Client) {
 	}
 }
 
-func removeToxics(client *client.Client) {
+func removeToxics(toxiclient *client.Client) {
 	for _, cfg := range proxyConfig {
-		proxy, err := client.Proxy(cfg.Name)
+		proxy, err := toxiclient.Proxy(cfg.Name)
 		if err != nil {
 			log.Printf("Error fetching proxy %s for toxic removal: %v", cfg.Name, err)
 			continue
@@ -126,9 +127,9 @@ func removeToxics(client *client.Client) {
 	}
 }
 
-func deleteProxies(client *client.Client) {
+func deleteProxies(toxiclient *client.Client) {
 	for _, cfg := range proxyConfig {
-		err := client.DeleteProxy(cfg.Name)
+		err := toxiclient.DeleteProxy(cfg.Name)
 		if err != nil {
 			log.Printf("Failed to delete proxy %s: %v", cfg.Name, err)
 			continue 
