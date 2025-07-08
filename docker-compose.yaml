@@ -58,6 +58,7 @@ services:
         condition: service_started
     volumes:
         - ./state : /app/state
+        - ./logs : /app/logs
     env_file:
       - .env
     

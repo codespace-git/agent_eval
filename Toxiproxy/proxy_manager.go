@@ -47,7 +47,6 @@ func main() {
 	}
 
 	for {
-		time.Sleep(time.Second)
 
 		count, limit := getState(db)
 
@@ -57,6 +56,7 @@ func main() {
 			log.Println("service no longer required,exiting now")
 			return 
 		case count%10 == 9:
+			time.Sleep(time.Second)
 			injectToxics(client)
 		case count == -1:
 			removeToxics(client)
@@ -66,6 +66,7 @@ func main() {
 }
 
 func createTable(db *sql.DB) {
+	for{
 	_, err := db.Exec(`
 		CREATE TABLE control (
 			id INTEGER PRIMARY KEY,
@@ -74,8 +75,15 @@ func createTable(db *sql.DB) {
 		);
 		INSERT OR IGNORE INTO control (id, count, limit) VALUES (1, 0, 0);
 	`)
+	
 	if err!=nil{
 		log.Printf("error creating table: %v",err)
+		continue
+	}
+	
+	if err == nil{
+		log.Printf("table created")
+	}
 	
 }
 
