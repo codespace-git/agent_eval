@@ -36,7 +36,7 @@ func main() {
 	defer db.Close()
 	
 	createTable(db)
-}
+
 	
 	for _, cfg := range proxyConfig {
 		_, err := client.CreateProxy(cfg.Name, cfg.Listen, cfg.Upstream)
@@ -68,7 +68,7 @@ func main() {
 func createTable(db *sql.DB) {
 	for{
 	_, err := db.Exec(`
-		CREATE TABLE control (
+		CREATE TABLE IF NOT EXISTS control (
 			id INTEGER PRIMARY KEY,
 			count INTEGER ,
 			limit INTEGER 
@@ -83,6 +83,7 @@ func createTable(db *sql.DB) {
 	
 	if err == nil{
 		log.Printf("table created")
+		break
 	}
 	
 }
