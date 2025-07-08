@@ -32,7 +32,7 @@ services:
   proxy_mgr:
     build: ./Toxiproxy
     volumes:
-      - ./state : /app/state 
+      - ./state:/app/state 
   
   
   agent:
@@ -57,8 +57,8 @@ services:
       proxy_mgr:
         condition: service_started
     volumes:
-        - ./state : /app/state
-        - ./logs : /app/logs
+        - ./state:/app/state
+        - ./logs:/app/logs
     env_file:
       - .env
     
