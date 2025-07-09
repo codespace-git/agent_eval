@@ -139,13 +139,13 @@ func main() {
 
 func createTable(db *sql.DB) {
 	for{
-	_, err := db.Exec(`m
+	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS control (
 			id INTEGER PRIMARY KEY,
 			count INTEGER ,
-			limit INTEGER 
+			data_size INTEGER 
 		);
-		INSERT OR IGNORE INTO control (id, count, limit) VALUES (1, 0, 0);
+		INSERT OR IGNORE INTO control (id, count, data_size) VALUES (1, 0, 0);
 	`)
 	
 	if err!=nil{
@@ -162,7 +162,7 @@ func createTable(db *sql.DB) {
 
 func getState(db *sql.DB) (int, int) {
 	var count, limit int
-	err := db.QueryRow("SELECT count, limit FROM control WHERE id = 1").Scan(&count, &limit)
+	err := db.QueryRow("SELECT count, data_size FROM control WHERE id = 1").Scan(&count, &limit)
 	if err != nil {
 		log.Printf("DB fetch error: %v", err)
 		return 0,0
