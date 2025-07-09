@@ -18,12 +18,12 @@ info_logger = logging.getLogger("info")
 info_handler = logging.FileHandler("logs/info.log")
 info_logger.setLevel(logging.INFO)
 info_handler.setFormatter(logging.Formatter("%(asctime)s [agent] %(message)s"))
-info_logger.setHandler(info_handler)
+info_logger.addHandler(info_handler)
 
 agent_logger = logging.getLogger("agent")
 agent_handler = logging.FileHandler("logs/agent.log")
 agent_logger.setLevel(logging.INFO)
-agent_logger.setHandler(agent_handler)
+agent_logger.addHandler(agent_handler)
 
 
 PROXY ={
@@ -156,12 +156,12 @@ if __name__ == "__main__" :
     llm = OpenAI(temperature=0)
     agent = initialize_agent(TOOLS, llm, agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION, verbose=False)
 
-    with open("agent/prompts.json", "r", encoding="utf-8") as f:
+    with open("prompts.json", "r", encoding="utf-8") as f:
         prompts = json.load(f)
 
     with sqlite3.connect("state/state.db") as conn:
         cursor = conn.cursor()
-        cursor.execute("UPDATE control SET limit = ? WHERE id = 1", (len(prompts),))
+        cursor.execute("UPDATE control SET data_size = ? WHERE id = 1", (len(prompts),))
         conn.commit()
 
     for i, item in enumerate(prompts):
