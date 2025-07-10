@@ -1,9 +1,17 @@
 from flask import Flask, request, jsonify
+import os
 import random
 import json
 import time
 
 app = Flask(__name__)
+
+try:
+    ERROR_PROB = float(os.getenv("ERROR_PROB", "0.1"))
+    if not (0.0 <= ERROR_PROB <= 1.0):
+        ERROR_PROB = 0.1
+except ValueError:
+    ERROR_PROB = 0.1
 
 with open("movies.json", "r") as f :
     MOVIES = json.load(f)
@@ -11,7 +19,7 @@ with open("movies.json", "r") as f :
 
 @app.route("/movie", methods=["GET"])
 def search_movie():
-    if random.random() < 0.1:
+    if random.random() < ERROR_PROB:
         return jsonify({"status": "error", "message": "Internal Server Error"}), 500
     response = request.args
     query = response.get("query","")

@@ -3,29 +3,37 @@ services:
     image: ghcr.io/shopify/toxiproxy:2.12.0
   search_tool:
     build: ./flask_tools/serp
-   
+    environment:
+      - ERROR_PROB=${ERROR_PROB}
   weather_tool:
     build: ./flask_tools/openweather
-   
+    environment:
+      - ERROR_PROB=${ERROR_PROB}
   
   movie_tool:
     build: ./flask_tools/tmdb
-   
+    environment:
+      - ERROR_PROB=${ERROR_PROB}
   
   calendar_tool:
     build: ./flask_tools/calendar
-   
+    environment:
+      - ERROR_PROB=${ERROR_PROB} 
   
   calculator_tool:
     build: ./flask_tools/calculator
-   
+    environment:
+      - ERROR_PROB=${ERROR_PROB}
     
   message_tool:
     build: ./flask_tools/message
-   
+    environment:
+      - ERROR_PROB=${ERROR_PROB}
   
   translator_tool:
     build: ./flask_tools/translator
+    environment:
+      - ERROR_PROB=${ERROR_PROB}
   proxy_mgr:
     build: ./Toxiproxy
     volumes:
@@ -57,7 +65,8 @@ services:
         - ./logs:/app/logs
     env_file:
       - .env 
-     
+    environment:
+      -TOXIC_PROB=${TOXIC_PROB}
     
 
   

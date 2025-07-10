@@ -1,7 +1,8 @@
-
+pydantic
 requests
 langchain
-openai
-langchain-openai
+langchain-core
+langchain-groq
+
 
 

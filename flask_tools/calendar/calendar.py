@@ -1,10 +1,18 @@
 from flask import Flask, request, jsonify
+import os
 from datetime import datetime
 import random
 import time
 import uuid
 
 app = Flask(__name__)
+
+try:
+    ERROR_PROB = float(os.getenv("ERROR_PROB", "0.1"))
+    if not (0.0 <= ERROR_PROB <= 1.0):
+        ERROR_PROB = 0.1
+except ValueError:
+    ERROR_PROB = 0.1
 
 
 EVENTS = []
@@ -14,7 +22,7 @@ def generate_id():
 
 @app.route("/events", methods=["GET"])
 def list_events():
-    if random.random()<0.1 :
+    if random.random()<ERROR_PROB :
         return jsonify({"status":"error","message":"internal server error"}),500
     date = request.args.get("date","")
     if date:
@@ -33,7 +41,7 @@ def list_events():
 @app.route("/events", methods=["POST"])
 
 def create_event():
-    if random.random()<0.1 :
+    if random.random()<ERROR_PROB :
          return jsonify({"status":"error","message":"internal server error"}),500
     data = request.get_json()
     if not data:
@@ -56,15 +64,15 @@ def create_event():
         "date": date,
         "time": time
     }
+    global EVENTS
     EVENTS.append(event)
     return jsonify({"message": "Event created", "event": event}), 200
 
 @app.route("/events", methods=["DELETE"])
 
 def delete_event():
-    if random.random()<0.1 :
+    if random.random()<ERROR_PROB :
          return jsonify({"status":"error","message":"internal server error"}),500
-    
     data = request.get_json()
     if not data :
         return jsonify({"status":"error","message":"invalid date entry"}),400
