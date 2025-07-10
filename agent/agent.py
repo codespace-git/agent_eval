@@ -11,8 +11,8 @@ from langchain_core.tools import Tool,StructuredTool
 from langchain_groq import ChatGroq
 from langchain import hub
 
+from datetime import datetime
 from pydantic import BaseModel,ValidationError,Field
-
 
 
 os.makedirs("logs", exist_ok=True)
@@ -21,12 +21,12 @@ info_logger = logging.getLogger("info")
 info_handler = logging.FileHandler("logs/info.log")
 info_logger.setLevel(logging.INFO)
 info_handler.setFormatter(logging.Formatter("%(asctime)s [agent] %(message)s"))
-info_logger.setHandler(info_handler)
+info_logger.addHandler(info_handler)
 
 agent_logger = logging.getLogger("agent")
 agent_handler = logging.FileHandler("logs/agent.log")
 agent_logger.setLevel(logging.INFO)
-agent_logger.setHandler(agent_handler)
+agent_logger.addHandler(agent_handler)
 
 
 PROXY ={
@@ -125,7 +125,7 @@ send_message = StructuredTool.from_function(name="send_message",description="Sen
 TOOLS = [
     Tool(
         name="search_web",
-        func=lambda q: call_with_toxic("search", "/serp", params={"q": q}),
+        func=lambda query: call_with_toxic("search", "/serp", params={"q": query}),
         description="Search the internet for information."
     ),
     Tool(
@@ -141,12 +141,12 @@ TOOLS = [
     add_event,
     Tool(
         name="delete_event_by_date",
-        func=lambda d: call_with_toxic("calendar", "/events", method="DELETE", params={"date": d}),
+        func=lambda date: call_with_toxic("calendar", "/events", method="DELETE", params={"date": date}),
         description="Delete all events on a date."
     ),
     Tool(
         name="get_event",
-        func= lambda d :call_with_toxic("calendar","/events",params={"date":d}),
+        func= lambda date :call_with_toxic("calendar","/events",params={"date":date}),
         description="get all events on a calendar date."
     ),
     translate,
@@ -166,15 +166,24 @@ def create_db():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS control (
                 id INTEGER PRIMARY KEY,
-                count INTEGER DEFAULT 0,
-                data_size INTEGER DEFAULT 0
+                count INTEGER,
+                data_size INTEGER,
+                value INTEGER
             )
         """)
-        cursor.execute("INSERT OR IGNORE INTO control (id, count, data_size) VALUES (1, 0, 0)")
+        cursor.execute("INSERT OR IGNORE INTO control (id, count, data_size,value) VALUES (1, 0, 0, 10)")
         conn.commit()
 
+def db_handler(count:int,val:int,prompts:list):
+    if (count+1)%val==0:
+        random.shuffle(prompts)
+    if count%val==0:
+        with sqlite3.connect("state/state.db")as conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE control SET count = -1 WHERE id = 1")
+            conn.commit()
 
-def response_handler(agent_executor: AgentExecutor, prompts: list, prompt: str, count: int):
+def response_handler(agent_executor: AgentExecutor, prompts: list, prompt: str, count: int,val:int):
     try:
         result = agent_executor.invoke({"input":prompt})
         data = result["output"]
@@ -197,11 +206,12 @@ def response_handler(agent_executor: AgentExecutor, prompts: list, prompt: str, 
                 "result": data.get("result", ""),
                 "status": data.get("status", 200)
             }, indent=2, ensure_ascii=False))
+        
         else:
             agent_logger.info(json.dumps({
                 "prompt": prompt,
                 "result": str(data),
-                "status": "unknown_format"
+                "status": 200
             }, indent=2, ensure_ascii=False))
 
 
@@ -220,33 +230,35 @@ def response_handler(agent_executor: AgentExecutor, prompts: list, prompt: str, 
             "status": "agent_error"
         }, indent=2, ensure_ascii=False))
 
-
     finally:
-        if count%10==9:
-            random.shuffle(prompts)
-        if count%10==0:
-            with sqlite3.connect("state/state.db")as conn:
-                cursor = conn.cursor()
-                cursor.execute("UPDATE control SET count = -1 WHERE id = 1")
-                conn.commit()
+        db_handler(count,val,prompts)
 
 if __name__ == "__main__" :
 
     create_db()
+
+    try:
+        toxic_prob = float(os.getenv("TOXIC_PROB", "0.1"))
+    except ValueError:
+        toxic_prob = 0.1
+
+    val = int(1.0 / toxic_prob) if 0.0 < toxic_prob < 1.0 else 10
 
     llm = ChatGroq(temperature=0, model="llama3-70b-8192")
     prompt = hub.pull("hwchase17/structured-chat-agent")
     agent = create_structured_chat_agent(llm, TOOLS, prompt)
     agent_executor = AgentExecutor(agent=agent, tools=TOOLS, verbose=False)
 
-    with open("agent/prompts.json", "r", encoding="utf-8") as f:
+    with open("prompts.json", "r", encoding="utf-8") as f:
         prompts = json.load(f)
 
     with sqlite3.connect("state/state.db") as conn:
         cursor = conn.cursor()
-        cursor.execute("UPDATE control SET limit = ? WHERE id = 1", (len(prompts),))
+        cursor.execute("UPDATE control SET data_size = ?, value = ? WHERE id = 1", (len(prompts),val))
         conn.commit()
 
+    count = 0
+    
     for i, item in enumerate(prompts):
         count = i+1
         prompt = item.get("prompt")
@@ -256,7 +268,11 @@ if __name__ == "__main__" :
             cursor.execute("UPDATE control SET count = ? WHERE id = 1", (count,))
             conn.commit()
         
-        response_handler(agent_executor,prompts,prompt,count)
+        response_handler(agent_executor,prompts,prompt,count,val)
+    
+    
+
+
 
 
 
