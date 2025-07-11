@@ -1,6 +1,7 @@
 import os
 import json
 import random
+import re
 import logging
 import requests
 import sqlite3
@@ -42,7 +43,7 @@ PROXY ={
 def call_with_toxic(tool_name, endpoint, method="GET", params=None, json_data=None):
     proxy = PROXY[tool_name]
     url = f"http://toxiproxy:{proxy}{endpoint}"
-
+    network_start = datetime.now()
     try:
         match method:
             case "GET":
@@ -51,20 +52,20 @@ def call_with_toxic(tool_name, endpoint, method="GET", params=None, json_data=No
                 res = requests.post(url, json=json_data or {}, timeout=5)
             case "DELETE":
                 res = requests.delete(url, params=params or {}, timeout=5)
-            case _:
-                raise ValueError("invalid method")
-
+    network_end = datetime.now()
+    info_logger.info(json.dumps({
+        "tool":tool_name,
+        "network_start":network_start.isoformat(),
+        "network_end":network_end.isoformat(),
+        "network_latency": (network_end - network_start).total_seconds()
+    },indent=2,ensure_ascii = False
+    )
         res.raise_for_status()
         final = {}
         final["result"]=res.json()
         final["status"] = res.status_code
         return final
-
-
-    except ValueError as e:
-        info_logger.error(f"{tool_name} failed due to invalid method type: {str(e)}")
-        return {"result": str(e), "status": 400}
-    
+ 
     except requests.exceptions.Timeout:
         info_logger.error(f"{tool_name} timed out at endpoint {endpoint}")
         return {"result": "timeout error","status":408}
@@ -168,70 +169,120 @@ def create_db():
                 id INTEGER PRIMARY KEY,
                 count INTEGER,
                 data_size INTEGER,
-                value INTEGER
+                inject INTEGER
             )
         """)
-        cursor.execute("INSERT OR IGNORE INTO control (id, count, data_size,value) VALUES (1, 0, 0, 10)")
+        cursor.execute("INSERT OR IGNORE INTO control (id, count, data_size, inject) VALUES (1, 0, 0, 0)")
         conn.commit()
 
-def db_handler(count:int,val:int,prompts:list):
-    if (count+1)%val==0:
-        random.shuffle(prompts)
-    if count%val==0:
-        with sqlite3.connect("state/state.db")as conn:
-            cursor = conn.cursor()
-            cursor.execute("UPDATE control SET count = -1 WHERE id = 1")
-            conn.commit()
 
-def response_handler(agent_executor: AgentExecutor, prompts: list, prompt: str, count: int,val:int):
+
+def db_handler(prob:float):
+    with sqlite3.connect("state/state.db")as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE control SET inject = ? WHERE id = 1",(int(random.random()< prob),))
+        conn.commit()
+    
+
+
+def response_handler(agent_executor: AgentExecutor, prompt: str, count: int,prob:float):
+    state = True
+
     try:
+        prompt_start = datetime.now()
         result = agent_executor.invoke({"input":prompt})
+        prompt_end = datetime.now()
+        duration = (prompt_end - prompt_start).total_seconds()
         data = result["output"]
+        
+        
         if isinstance(data,str):
             try:
+
                 parsed_data = json.loads(data)
-                data = parsed_data
+                status = parsed_data.get("status")
+                if 400<=status<600 :
+                    state=False
+                agent_logger.info(json.dumps({
+                    "prompt":prompt,
+                    "result":parsed_data.get("result"),
+                    "status":status,
+                    "start_time":prompt_start.isoformat(),
+                    "end_time":prompt_end.isoformat(),
+                    "duration":duration
+                },indent=2,ensure_ascii=False))
+
             except json.JSONDecodeError:
+                match = re.search( r'"status"\s*:\s*200',data)
+                state = bool(match)
                 agent_logger.warning(json.dumps({
                     "prompt": prompt,
                     "raw_output": data,
-                    "result": "Invalid JSON format returned from tool",
-                    "status": "json_parse_error"
+                    "status":200 if state else 400,
+                    "start_time":prompt_start.isoformat(),
+                    "end_time":prompt_end.isoformat(),
+                    "duration":duration
                 }, indent=2, ensure_ascii=False))
         
 
-        if isinstance(data,dict):
+        elif isinstance(data,dict):
+            status = data.get("status")
+            if 400<=status<600 :
+                state=False
             agent_logger.info(json.dumps({
                 "prompt": prompt,
-                "result": data.get("result", ""),
-                "status": data.get("status", 200)
+                "result": data.get("result"),
+                "status": status,
+                "start_time":prompt_start.isoformat(),
+                "end_time":prompt_end.isoformat(),
+                "duration":duration
             }, indent=2, ensure_ascii=False))
         
         else:
+            text = str(data)
+            match = re.search(r'"status"\s*:\s*200',text)
+            state = bool(match)
             agent_logger.info(json.dumps({
                 "prompt": prompt,
-                "result": str(data),
-                "status": 200
+                "result": text,
+                "status": 200 if match else 400,
+                "start_time":prompt_start.isoformat(),
+                "end_time":prompt_end.isoformat(),
+                "duration":duration
             }, indent=2, ensure_ascii=False))
 
 
     except ValidationError as e:
+        prompt_end = datetime.now()
+        duration = (prompt_end - prompt_start).total_seconds()
+        state = False
         agent_logger.error(json.dumps({
             "prompt": prompt,
-            "result": "Validation error",
-            "status": "validation_error"
+            "result": "agent was unable to validate required input types",
+            "status": "validation error",
+            "start_time":prompt_start.isoformat(),
+            "end_time":prompt_end.isoformat(),
+            "duration":duration
         }, indent=2, ensure_ascii=False))
 
 
     except Exception as e:
+        prompt_end = datetime.now()
+        duration = (prompt_end - prompt_start).total_seconds()
+        state = False
         agent_logger.error(json.dumps({
             "prompt": prompt,
             "result": str(e),
-            "status": "agent_error"
+            "status": "agent error",
+            "start_time":prompt_start.isoformat(),
+            "end_time":prompt_end.isoformat(),
+            "duration":duration
         }, indent=2, ensure_ascii=False))
 
     finally:
-        db_handler(count,val,prompts)
+        db_handler(prob)
+        return state
+        
 
 if __name__ == "__main__" :
 
@@ -242,7 +293,6 @@ if __name__ == "__main__" :
     except ValueError:
         toxic_prob = 0.1
 
-    val = int(1.0 / toxic_prob) if 0.0 < toxic_prob < 1.0 else 10
 
     llm = ChatGroq(temperature=0, model="llama3-70b-8192")
     prompt = hub.pull("hwchase17/structured-chat-agent")
@@ -254,11 +304,14 @@ if __name__ == "__main__" :
 
     with sqlite3.connect("state/state.db") as conn:
         cursor = conn.cursor()
-        cursor.execute("UPDATE control SET data_size = ?, value = ? WHERE id = 1", (len(prompts),val))
+        cursor.execute("UPDATE control SET data_size = ? WHERE id = 1", (len(prompts)))
         conn.commit()
 
     count = 0
-    
+    succ_count = 0
+    db_handler(toxic_prob)
+    overall_start = datetime.now()
+
     for i, item in enumerate(prompts):
         count = i+1
         prompt = item.get("prompt")
@@ -268,7 +321,20 @@ if __name__ == "__main__" :
             cursor.execute("UPDATE control SET count = ? WHERE id = 1", (count,))
             conn.commit()
         
-        response_handler(agent_executor,prompts,prompt,count,val)
+        if response_handler(agent_executor,prompt,count,toxic_prob):
+            succ_count+=1
+    
+    overall_stop = datetime.now()
+    total_duration = (overall_stop - overall_start).total_seconds()
+
+    info_logger.info(json.dumps({
+        "start":overall_start.isoformat(),
+        "end":overall_stop.isoformat(),
+        "duration":total_duration,
+        "# successful requests":succ_count,
+        "total requests":len(prompts)
+    },indent=2,ensure_ascii=False))
+
     
     
 
