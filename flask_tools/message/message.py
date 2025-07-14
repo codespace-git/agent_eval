@@ -2,7 +2,7 @@ from flask import Flask, request, jsonify
 import os
 import uuid
 import random
-import time
+
 
 app = Flask(__name__)
 
@@ -22,30 +22,31 @@ def generate_id():
 @app.route("/message", methods=["POST"])
 def send_message():
     if random.random()<ERROR_PROB :
-         return jsonify({"status":"error","message":"internal server error"}),500
+         return jsonify({"message":"internal server error"}),500
     data = request.get_json()
     if not data:
-        return jsonify({"error:missing data field"}),400
+        return jsonify({"warning":"missing data field"}),400
     recipient = data.get("to", "").strip()
     body = data.get("body", "").strip()
 
     if not recipient or not body:
-        return jsonify({"error": "Missing 'to' or 'body'"}), 400
+        return jsonify({"warning": "Missing 'to' or 'body'"}), 400
 
     msg = {
         "id": generate_id(),
-        "send-to": recipient,
+        "to": recipient,
         "body": body,
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
     }
-    global MESSAGES
     MESSAGES.append(msg)
-    return jsonify({"status": "sent", "message": msg}), 200
+    return jsonify({"message sent": msg}), 200
 
 @app.route("/inbox", methods=["GET"])
 def inbox():
     if random.random()<ERROR_PROB :
-         return jsonify({"status":"error","message":"internal server error"}),500
+         return jsonify({"message":"internal server error"}),500
+    if not MESSAGES:
+        return jsonify({"messages": "No messages found"}), 200
     return jsonify({"messages": MESSAGES}), 200
 
 

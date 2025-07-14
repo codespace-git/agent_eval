@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"log"
 	"time"
+	"math/rand"
 	toxiproxy "github.com/Shopify/toxiproxy/v2/client"
 	_ "modernc.org/sqlite"
 )
@@ -26,6 +27,15 @@ var proxyConfig = []struct {
 	{"message_proxy", "0.0.0.0:6005", "message_tool:5005"},
 	{"translator_proxy", "0.0.0.0:6006", "translator_tool:5006"},
 }
+toxics := []struct {
+    Name   string
+    Type   string
+    Stream string
+}{
+    {"timeout_toxic_down", "timeout", "downstream"},
+    {"timeout_toxic_up", "timeout", "upstream"},
+}
+
 
 func main() {
 	
@@ -60,13 +70,13 @@ for _, cfg := range proxyConfig {
 			log.Println("service no longer required,exiting now")
 			return 
 		case inject == 1:
-			if !activeToxics(toxiClient,"timeout_toxic"){
+			
 			injectToxics(toxiClient)
-			}
+			
 		case inject == 0:
-			if activeToxics(toxiClient,"timeout_toxic"){
+			
 			removeToxics(toxiClient)
-			}
+			
 		
 		}
 	}
@@ -109,26 +119,19 @@ func getState(db *sql.DB) (int, int, int) {
 	return count, size, inject
 
 }
-func activeToxics(client *toxiproxy.Client, toxicName string) bool {
-var proxies map[string]*toxiproxy.Proxy
-	
-	for {
-	var err error
-	proxies, err = client.Proxies()
-	if err!=nil {
-		continue
-	}
-	break
-  }
-	for _, proxy := range proxies {
-        toxic, err := proxy.Toxic(toxicName)
-        if err == nil {
-            return true
-        }
-    }
-    return false
-}
 
+
+func removeToxicsForProxy(proxy *toxiproxy.Proxy) {
+	
+	if _, err := proxy.Toxic("toxic_timeout_up"); err == nil {
+		 proxy.RemoveToxic("toxic_timeout_up")
+	}
+
+	   
+	if _, err := proxy.Toxic("toxic_timeout_down"); err == nil {
+		 proxy.RemoveToxic("toxic_timeout_down")
+	}
+}
 
 func injectToxics(client *toxiproxy.Client) {
 	for _, cfg := range proxyConfig {
@@ -136,9 +139,16 @@ func injectToxics(client *toxiproxy.Client) {
 		if err != nil {
 			continue
 		}
-		proxy.AddToxic("timeout_toxic", "timeout", "downstream", 1.0, toxiproxy.Attributes{"timeout": 5000})
+		removeToxicsForProxy(proxy)
+		if rand.Intn(2) == 0 {
+		proxy.AddToxic("toxic_timeout_up", "timeout", "upstream", 1.0, toxiproxy.Attributes{"timeout": 5000})
+		}
+		else {
+		proxy.AddToxic("toxic_timeout_down", "timeout", "downstream", 1.0, toxiproxy.Attributes{"timeout": 5000})
+		}
 		proxy.Save()
-	}
+		
+}
 }
 
 func removeToxics(client *toxiproxy.Client) {
@@ -147,8 +157,9 @@ func removeToxics(client *toxiproxy.Client) {
 		if err != nil {
 			continue
 		}
-		proxy.RemoveToxic("timeout_toxic")
+		removeToxicsForProxy(proxy)
 		proxy.Save()
+		
 		}
 	}
 
@@ -161,5 +172,6 @@ func deleteProxies(client *toxiproxy.Client) {
 			continue
 		}
 		proxy.Delete()	
+		
 	}
 }

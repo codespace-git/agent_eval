@@ -2,7 +2,7 @@ from flask import Flask, request, jsonify
 import os
 import math
 import random
-import time
+
 
 app = Flask(__name__)
 
@@ -21,11 +21,11 @@ def calculator():
     
     data = request.get_json()
     if not data:
-        return jsonify({"error":"data not found"}),400
+        return jsonify({"data not found"}),400
     expr = data.get("expression", "").strip()
 
     if not expr:
-        return jsonify({"error": "Missing expression field"}), 400
+        return jsonify({"warning":"Missing expression field"}), 400
 
     try:
         allowed_names = {
@@ -42,7 +42,7 @@ def calculator():
         return jsonify({"result": result}), 200
 
     except ValueError as e:
-        return jsonify({"error": str(e)}), 404
+        return jsonify({"error": str(e)}), 400
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500

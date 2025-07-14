@@ -2,7 +2,7 @@ from flask import Flask, request, jsonify
 import os
 from deep_translator import GoogleTranslator
 import random
-import time
+
 
 app = Flask(__name__)
 
@@ -17,24 +17,25 @@ except ValueError:
 @app.route("/translate", methods=["POST"])
 def translate():
     if random.random()<ERROR_PROB:
-        return jsonify({"error":"internal servor error"}),500
+        return jsonify({"messsage":"internal servor error"}),500
 
     data = request.get_json()
     if not data:
-        return jsonify({"error":"no data found"}),400
-    text = data.get("text","")
-    source = data.get("source_language", "auto")
-    target = data.get("target_language","english")
+        return jsonify({"warning":"no input data found"}),400
+    text = data.get("text","").strip()
+    source = data.get("source_language", "auto").strip()
+    target = data.get("target_language","english").strip()
 
     if not text or not target:
-        return jsonify({"error": "Missing text or target language"}), 404
+        return jsonify({"warning": "Missing text or target language"}), 400
 
     try:
         translated = GoogleTranslator(source=source, target=target).translate(text)
     except Exception as e:
-        return jsonify({"error": f"Translation failed: {str(e)}"}), 500
+        return jsonify({"message": f"Translation failed: {str(e)}"}), 500
 
     return jsonify({
+        "source_text": text,
         "translated_text": translated,
         "source_language": source,
         "target_language": target

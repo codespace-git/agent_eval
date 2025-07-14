@@ -44,6 +44,7 @@ def call_with_toxic(tool_name, endpoint, method="GET", params=None, json_data=No
     proxy = PROXY[tool_name]
     url = f"http://toxiproxy:{proxy}{endpoint}"
     network_start = datetime.now()
+
     try:
         match method:
             case "GET":
@@ -52,28 +53,29 @@ def call_with_toxic(tool_name, endpoint, method="GET", params=None, json_data=No
                 res = requests.post(url, json=json_data or {}, timeout=5)
             case "DELETE":
                 res = requests.delete(url, params=params or {}, timeout=5)
-    network_end = datetime.now()
-    info_logger.info(json.dumps({
-        "tool":tool_name,
-        "network_start":network_start.isoformat(),
-        "network_end":network_end.isoformat(),
-        "network_latency": (network_end - network_start).total_seconds()
-    },indent=2,ensure_ascii = False
-    )
-        res.raise_for_status()
+        network_end = datetime.now()
+
+        info_logger.info(json.dumps({
+             "tool":tool_name,
+            "network_start":network_start.isoformat(),
+            "network_end":network_end.isoformat(),
+            "network_latency": (network_end - network_start).total_seconds()
+        },indent=2,ensure_ascii = False))
+
+
         final = {}
         final["result"]=res.json()
         final["status"] = res.status_code
         return final
- 
+
+
     except requests.exceptions.Timeout:
         info_logger.error(f"{tool_name} timed out at endpoint {endpoint}")
         return {"result": "timeout error","status":408}
 
-    except requests.exceptions.HTTPError:
-        status = getattr(res, "status_code", "unknown")
-        info_logger.error(f"{status} {tool_name} error at endpoint {endpoint}")
-        return {"result": f"HTTP {status} error","status":status}
+    except requests.exceptions.ConnectionError:
+        info_logger.error(f"connection aborted with {tool_name} at endpoint {endpoint}")
+        return {"result":"connection error","status":503}
 
     except Exception as e:
         info_logger.error(f"{tool_name} failed: {str(e)}")
@@ -111,8 +113,6 @@ calculate_expr = StructuredTool.from_function(name="calculate_expr",func = calcu
 
 
 
-
-
 class MessageSchema(BaseModel):
     to : str = Field(description="name of the person to send message to")
     body : str =Field(description="content of the message")
@@ -121,7 +121,19 @@ def message_method(input:MessageSchema):
 send_message = StructuredTool.from_function(name="send_message",description="Send a message to someone.",func=message_method,args_schema=MessageSchema)
 
 
+class SearchMovieSchema(BaseModel):
+    query: str = Field(description="name of the movie to search for")
+    language: str = Field(default="en", description="language of the movie")
+    page: int = Field(default=1, ge=1, description="page number for pagination")
+    per_page: int = Field(default=2, ge=1, description="number of results per page")
 
+def search_movie_method(input: SearchMovieSchema):
+    return call_with_toxic("movie", "/movie", params=input.dict())
+
+search_movie = StructuredTool.from_function(
+    name="search_movie",
+    func=search_movie_method,
+    description="Search for a movie.")
 
 TOOLS = [
     Tool(
@@ -134,11 +146,7 @@ TOOLS = [
         func=lambda city: call_with_toxic("weather", "/weather", params={"q": city}),
         description="Get current weather for a city."
     ),
-    Tool(
-        name="search_movie",
-        func=lambda title: call_with_toxic("movie", "/movie", params={"query": title}),
-        description="Search for a movie."
-    ),
+    search_movie,
     add_event,
     Tool(
         name="delete_event_by_date",
@@ -148,7 +156,7 @@ TOOLS = [
     Tool(
         name="get_event",
         func= lambda date :call_with_toxic("calendar","/events",params={"date":date}),
-        description="get all events on a calendar date."
+        description="Get all events on a calendar date."
     ),
     translate,
     calculate_expr,
@@ -164,28 +172,52 @@ TOOLS = [
 def create_db():
     with sqlite3.connect("state/state.db") as conn:
         cursor = conn.cursor()
-        cursor.execute("""
+        cursor.executescript("""
             CREATE TABLE IF NOT EXISTS control (
                 id INTEGER PRIMARY KEY,
                 count INTEGER,
                 data_size INTEGER,
                 inject INTEGER
-            )
+            );
+            INSERT OR IGNORE INTO control (id, count, data_size, inject) 
+            VALUES (1, 0, 0, 0);
         """)
-        cursor.execute("INSERT OR IGNORE INTO control (id, count, data_size, inject) VALUES (1, 0, 0, 0)")
         conn.commit()
 
+def classifier(status:int):
+        if status == 408 or status ==503:
+            return "network"
+        elif 400<=status<500 :
+            return "agent"
+        elif 500<=status<600 :
+            return "server"
+        else :
+            return "none"
 
-
-def db_handler(prob:float):
-    with sqlite3.connect("state/state.db")as conn:
-        cursor = conn.cursor()
-        cursor.execute("UPDATE control SET inject = ? WHERE id = 1",(int(random.random()< prob),))
-        conn.commit()
+def error_classifier(status):
+    if isinstance(status,int):
+        return classifier(status)
+    else:
+        match = re.search(r'"status"\s*:\s*(\d+)', status)
+        if match:
+            status_code= int(match.group(1))
+            error_type = classifier(status_code)
+            return error_type,status_code
+        else:
+            return "could not resolve error type",599
+    
     
 
 
-def response_handler(agent_executor: AgentExecutor, prompt: str, count: int,prob:float):
+def db_handler(prob:float,conn:sqlite3.Connection):
+    cursor = conn.cursor()
+    cursor.execute("UPDATE control SET inject = ? WHERE id = 1",(int(random.random()< prob),))
+    conn.commit()
+
+    
+
+
+def response_handler(agent_executor: AgentExecutor, prompt: str, prob:float,conn:sqlite3.Connection):
     state = True
 
     try:
@@ -198,10 +230,9 @@ def response_handler(agent_executor: AgentExecutor, prompt: str, count: int,prob
         
         if isinstance(data,str):
             try:
-
                 parsed_data = json.loads(data)
                 status = parsed_data.get("status")
-                if 400<=status<600 :
+                if 400<=status<600:
                     state=False
                 agent_logger.info(json.dumps({
                     "prompt":prompt,
@@ -209,19 +240,22 @@ def response_handler(agent_executor: AgentExecutor, prompt: str, count: int,prob
                     "status":status,
                     "start_time":prompt_start.isoformat(),
                     "end_time":prompt_end.isoformat(),
-                    "duration":duration
+                    "duration":duration,
+                    "error_type":error_classifier(status)
                 },indent=2,ensure_ascii=False))
 
             except json.JSONDecodeError:
-                match = re.search( r'"status"\s*:\s*200',data)
-                state = bool(match)
+                error_type,status = error_classifier(data)
+                if 400<=status<600:
+                    state = False
                 agent_logger.warning(json.dumps({
                     "prompt": prompt,
                     "raw_output": data,
-                    "status":200 if state else 400,
+                    "status":status ,
                     "start_time":prompt_start.isoformat(),
                     "end_time":prompt_end.isoformat(),
-                    "duration":duration
+                    "duration":duration,
+                    "error_type":error_type
                 }, indent=2, ensure_ascii=False))
         
 
@@ -235,20 +269,23 @@ def response_handler(agent_executor: AgentExecutor, prompt: str, count: int,prob
                 "status": status,
                 "start_time":prompt_start.isoformat(),
                 "end_time":prompt_end.isoformat(),
-                "duration":duration
+                "duration":duration,
+                "error_type":error_classifier(status)
             }, indent=2, ensure_ascii=False))
         
         else:
             text = str(data)
-            match = re.search(r'"status"\s*:\s*200',text)
-            state = bool(match)
+            error_type,status = error_classifier(text)
+            if 400<=status<600:
+                state = False
             agent_logger.info(json.dumps({
                 "prompt": prompt,
                 "result": text,
-                "status": 200 if match else 400,
+                "status": status,
                 "start_time":prompt_start.isoformat(),
                 "end_time":prompt_end.isoformat(),
-                "duration":duration
+                "duration":duration,
+                "error_type":error_type
             }, indent=2, ensure_ascii=False))
 
 
@@ -258,8 +295,9 @@ def response_handler(agent_executor: AgentExecutor, prompt: str, count: int,prob
         state = False
         agent_logger.error(json.dumps({
             "prompt": prompt,
-            "result": "agent was unable to validate required input types",
-            "status": "validation error",
+            "result": str(e),
+            "status":"validation error",
+            "error_type":"agent",
             "start_time":prompt_start.isoformat(),
             "end_time":prompt_end.isoformat(),
             "duration":duration
@@ -273,10 +311,11 @@ def response_handler(agent_executor: AgentExecutor, prompt: str, count: int,prob
         agent_logger.error(json.dumps({
             "prompt": prompt,
             "result": str(e),
-            "status": "agent error",
+            "status":"llm or parsing error",
+            "error_type":"agent",
             "start_time":prompt_start.isoformat(),
             "end_time":prompt_end.isoformat(),
-            "duration":duration
+            "duration":duration  
         }, indent=2, ensure_ascii=False))
 
     finally:
@@ -302,28 +341,27 @@ if __name__ == "__main__" :
     with open("prompts.json", "r", encoding="utf-8") as f:
         prompts = json.load(f)
 
+    succ_count = 0
+
     with sqlite3.connect("state/state.db") as conn:
         cursor = conn.cursor()
         cursor.execute("UPDATE control SET data_size = ? WHERE id = 1", (len(prompts)))
         conn.commit()
 
-    count = 0
-    succ_count = 0
-    db_handler(toxic_prob)
-    overall_start = datetime.now()
-
-    for i, item in enumerate(prompts):
-        count = i+1
-        prompt = item.get("prompt")
-
-        with sqlite3.connect("state/state.db") as conn:
-            cursor = conn.cursor()
-            cursor.execute("UPDATE control SET count = ? WHERE id = 1", (count,))
-            conn.commit()
-        
-        if response_handler(agent_executor,prompt,count,toxic_prob):
-            succ_count+=1
     
+        db_handler(toxic_prob,conn)
+        overall_start = datetime.now()
+
+        for i, item in enumerate(prompts):
+            
+            prompt = item.get("prompt")
+            if response_handler(agent_executor,prompt,toxic_prob,conn):
+                succ_count+=1
+        
+        cursor = conn.cursor()
+        cursor.execute("UPDATE control SET count = ? WHERE id = 1", (len(prompts),))
+        conn.commit()
+
     overall_stop = datetime.now()
     total_duration = (overall_stop - overall_start).total_seconds()
 

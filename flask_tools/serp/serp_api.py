@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify
 import os
 import random
-import time
+
 
 app = Flask(__name__)
 
@@ -12,15 +12,22 @@ try:
 except ValueError:
     ERROR_PROB = 0.1
 
+def generate_link(query):
+    if not query:
+        return "https://wiki.com"
+    base_keyword = query.split()[0].lower()
+    domains = ["learn", "docs", "wiki", "dev", "guide","w3schools", "realpython", "geeksforgeeks", "stackoverflow"]
+    tld = random.choice([".com", ".org", ".io", ".dev"])
+    return f"https://{base_keyword}.{random.choice(domains)}{tld}/{query.replace(' ', '-')}"
 
 @app.route("/serp", methods=["GET"])
 def serp_mock():
     if random.random() < ERROR_PROB :
-        return jsonify({"status":"error","message":"internal server error"}),500
-    query = request.args.get("q","")
+        return jsonify({"message":"internal server error"}),500
+    query = request.args.get("q","").strip()
     
     if not query:
-        return jsonify({"error": "Missing query parameter 'q'"}), 400
+        return jsonify({"warning": "Missing query parameter 'q'"}), 400
 
     
     mock_results = []
@@ -49,13 +56,6 @@ def serp_mock():
 @app.route("/")
 def health():
     return jsonify({"status": "OK"}), 200
-
-def generate_link(query):
-    base_keyword = query.split()[0].lower()
-    domains = ["learn", "docs", "wiki", "dev", "guide","w3schools", "realpython", "geeksforgeeks", "stackoverflow"]
-    tld = random.choice([".com", ".org", ".io", ".dev"])
-    return f"https://{base_keyword}.{random.choice(domains)}{tld}/{query.replace(' ', '-')}"
-
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0",port=5000)

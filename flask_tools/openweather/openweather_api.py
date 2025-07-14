@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify
 import os
 import random
-import time
+
 
 app = Flask(__name__)
 
@@ -24,10 +24,10 @@ WEATHER_OPTIONS = [
 @app.route("/weather", methods=["GET"]) 
 def weather_mock():
     if random.random()<ERROR_PROB :
-         return jsonify({"status":"error","message":"internal server error"}),500
-    city = request.args.get("q", "Unknown City")
+         return jsonify({"message":"internal server error"}),500
+    city = request.args.get("q", "").strip()
     if not city :
-        return jsonify({"message":"invalid request"}),400
+        return jsonify({"warning":"invalid request"}),400
 
     random_weather = random.choice(WEATHER_OPTIONS)
     mock_response = {
@@ -39,7 +39,7 @@ def weather_mock():
             "pressure": random.randint(990, 1025),
             "humidity": random.randint(30, 90)
         },
-        "wind": {"speed": round(random.uniform(1, 10), 2), "deg": round(random.randint(0, 360),2)},
+        "wind": {"speed": round(random.uniform(1, 10), 2), "deg": random.randint(0, 360)},
         "name": city
     }
 

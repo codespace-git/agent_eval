@@ -2,7 +2,7 @@ from flask import Flask, request, jsonify
 import os
 import random
 import json
-import time
+
 
 app = Flask(__name__)
 
@@ -13,27 +13,29 @@ try:
 except ValueError:
     ERROR_PROB = 0.1
 
-with open("movies.json", "r") as f :
-    MOVIES = json.load(f)
-
+try:
+    with open("movies.json", "r") as f :
+        MOVIES = json.load(f)
+except FileNotFoundError:
+    return jsonify({"message": "Movies data not available"}), 500
 
 @app.route("/movie", methods=["GET"])
 def search_movie():
     if random.random() < ERROR_PROB:
-        return jsonify({"status": "error", "message": "Internal Server Error"}), 500
+        return jsonify({"message": "Internal Server Error"}), 500
     response = request.args
-    query = response.get("query","")
-    language = response.get("language", "en")
+    query = response.get("query","").strip()
+    language = response.get("language", "en").strip()
     page = int(response.get("page", 1))
     per_page = int(response.get("per_page", 2))  
 
     if not query :
-        return jsonify({"status": "fail","message": "Missing required parameter: query"}), 400
+        return jsonify({"warning": "Missing required parameter: query"}), 400
 
    
     filtered = [
         movie for movie in MOVIES
-        if query.lower() in movie["name"].lower() 
+        if query.lower() in movie.get("name","").lower() or query.lower() in movie.get("original_name","").lower()
     ]
 
    
