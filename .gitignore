@@ -2,3 +2,5 @@
 state/state.db
 logs/*
 !logs/.gitkeep
+agent/network.db
+agent/prompts.json

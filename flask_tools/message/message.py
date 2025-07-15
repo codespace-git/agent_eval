@@ -3,6 +3,7 @@ import os
 import uuid
 import random
 
+processed_requests = set()
 
 app = Flask(__name__)
 
@@ -26,12 +27,16 @@ def send_message():
     data = request.get_json()
     if not data:
         return jsonify({"warning":"missing data field"}),400
+    request_id = data.get("request_id", "").strip()
     recipient = data.get("to", "").strip()
     body = data.get("body", "").strip()
 
     if not recipient or not body:
         return jsonify({"warning": "Missing 'to' or 'body'"}), 400
-
+    if not request_id:
+        return jsonify({"warning": "Missing request identifier"}), 400
+    if request_id in processed_requests:
+        return jsonify({"warning": f"Request with identifier {request_id} already processed"}), 200
     msg = {
         "id": generate_id(),
         "to": recipient,
@@ -39,6 +44,7 @@ def send_message():
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
     }
     MESSAGES.append(msg)
+    processed_requests.add(request_id)
     return jsonify({"message sent": msg}), 200
 
 @app.route("/inbox", methods=["GET"])
@@ -52,6 +58,8 @@ def inbox():
 
 @app.route("/")
 def health():
+    if random.random()<0.33:
+        _ = processed_requests.pop() if processed_requests else None
     return jsonify({"status": "OK"}), 200
 
 

@@ -91,7 +91,7 @@ func createTable(db *sql.DB) {
 			data_size INTEGER ,
 			inject INTEGER 
 		);
-		INSERT OR IGNORE INTO control (id, count, data_size,inject) VALUES (1, 0, 0, 0);
+		INSERT OR IGNORE INTO control (id, count, data_size,inject) VALUES (1, 0, 1, 0);
 	`)
 	
 	if err!=nil{

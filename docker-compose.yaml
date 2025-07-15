@@ -80,6 +80,8 @@ services:
         - ./logs:/app/logs
     environment:
       TOXIC_PROB: ${TOXIC_PROB}
+      TOOL_LIMIT: ${TOOL_LIMIT}
+      PROMPT_LIMIT: ${PROMPT_LIMIT}
     env_file:
       - .env
     

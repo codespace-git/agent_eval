@@ -2,6 +2,7 @@ import os
 import json
 import random
 import re
+import uuid
 import logging
 import requests
 import sqlite3
@@ -40,47 +41,80 @@ PROXY ={
     "message": "6005",
 }
 
+class ToolLimitReachedException(Exception):
+    def __init__(self, status_code,message):
+        self.status_code = status_code
+        self.message = message
+        super().__init__(message)
+
 def call_with_toxic(tool_name, endpoint, method="GET", params=None, json_data=None):
     proxy = PROXY[tool_name]
     url = f"http://toxiproxy:{proxy}{endpoint}"
-    network_start = datetime.now()
+    tool_attempts = 0
 
-    try:
-        match method:
-            case "GET":
-                res = requests.get(url, params=params or {}, timeout=5)
-            case "POST":
-                res = requests.post(url, json=json_data or {}, timeout=5)
-            case "DELETE":
-                res = requests.delete(url, params=params or {}, timeout=5)
-        network_end = datetime.now()
+    with sqlite3.connect("state/state.db") as conn,sqlite3.connect("network.db") as connection:
+        cursor = connection.cursor()
+        cursor.execute("SELECT tool_limit, prompt_limit,prompt_attempt, prob,start FROM NETWORK WHERE id = 1")
+        row = cursor.fetchone()
 
-        info_logger.info(json.dumps({
-             "tool":tool_name,
-            "network_start":network_start.isoformat(),
-            "network_end":network_end.isoformat(),
-            "network_latency": (network_end - network_start).total_seconds()
-        },indent=2,ensure_ascii = False))
+        if row:
+            tool_limit, prompt_limit,prompt_attempt,prob, start = row
+            if not start:
+                start = datetime.now().isoformat()
+                cursor.execute("UPDATE NETWORK SET start = ? WHERE id = 1", (start,))
+                connection.commit()
+        else:
+            tool_limit, prompt_limit,prompt_attempt,prob, start = 1, 1 ,0, 0.1,datetime.now().isoformat()
 
+        while tool_attempts < tool_limit:
+            try:
+                 
+                if method == "GET":
+                    res = requests.get(url, params=params or {}, timeout=5)
+                elif method == "POST":
+                    res = requests.post(url, json=json_data or {}, timeout=5)
+                elif method == "DELETE":
+                    res = requests.delete(url, params=params or {}, timeout=5)
 
-        final = {}
-        final["result"]=res.json()
-        final["status"] = res.status_code
-        return final
+                network_end = datetime.now()
+                network_start = datetime.fromisoformat(start)
+                network_latency = (network_end - network_start).total_seconds()
+                total_attempts = (tool_limit*prompt_attempt)+tool_attempts + 1
 
+                info_logger.info(json.dumps({
+                    "tool":tool_name,
+                    "network_start":start,
+                    "network_end":network_end.isoformat(),
+                    "network_latency": network_latency,
+                    "total_tool_attempts": total_attempts
+                },indent=2,ensure_ascii = False))
 
-    except requests.exceptions.Timeout:
-        info_logger.error(f"{tool_name} timed out at endpoint {endpoint}")
-        return {"result": "timeout error","status":408}
+                
+                final = {
+                "result": res.json(),
+                "status": res.status_code
+                }
+                return final
+                
+            except (requests.exceptions.Timeout,requests.exceptions.ConnectionError) as e:
+                tool_attempts += 1
+                
+                if isinstance(e, requests.exceptions.Timeout):
+                    info_logger.error(f"{tool_name} timed out at endpoint {endpoint} after {tool_attempts} tool attempts in {prompt_attempt} prompt attempts")
+                else:
+                    info_logger.error(f"Connection aborted with {tool_name} at endpoint {endpoint} after {tool_attempts} tool attempts in {prompt_attempt} prompt attempts")
 
-    except requests.exceptions.ConnectionError:
-        info_logger.error(f"connection aborted with {tool_name} at endpoint {endpoint}")
-        return {"result":"connection error","status":503}
-
-    except Exception as e:
-        info_logger.error(f"{tool_name} failed: {str(e)}")
-        return {"result": str(e),"status":500}
-
+                if tool_attempts >= tool_limit:
+                    return {"result": "Tool limit exceeded", "status": 600}
+    
+                db_handler(prob, conn)
+                continue
+                
+            except Exception as e:
+                info_logger.error(f"{tool_name} failed: {str(e)}")
+                return {"result": str(e),"status":500}
+        
+        
 
 
 
@@ -88,6 +122,7 @@ class EventSchema(BaseModel):
     title: str = Field(description="title of the event")
     date : str = Field(description = "date of the event in YYYY-MM-DD format",pattern=r"^\d{4}-\d{2}-\d{2}$")
     time : str = Field(description = "time of event commencement in HH:MM(24 hour)format",pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    request_id : str = Field(default_factory=lambda: str(uuid.uuid4()), description="unique identifier for the request")
 def event_method(input:EventSchema):
     return call_with_toxic("calendar", "/events",method = "POST",json_data=input.dict())
 add_event = StructuredTool.from_function(name="add_event",func=event_method,description="add a calendar event.",args_schema = EventSchema)
@@ -98,6 +133,7 @@ class TranslateSchema(BaseModel):
     text:str = Field(description = "text to be translated")
     source_language:str = Field(description="language of the input text")
     target_language:str = Field(description ="language to which the text is to be translated")
+    request_id: str = Field(default_factory=lambda: str(uuid.uuid4()), description="unique identifier for the request")
 def translate_method(input:TranslateSchema):
     return call_with_toxic("translator", "/translate", method="POST", json_data=input.dict())
 translate = StructuredTool.from_function(name="translate",func=translate_method,description="Translate text from one language to another.",args_schema=TranslateSchema)
@@ -116,6 +152,7 @@ calculate_expr = StructuredTool.from_function(name="calculate_expr",func = calcu
 class MessageSchema(BaseModel):
     to : str = Field(description="name of the person to send message to")
     body : str =Field(description="content of the message")
+    request_id: str = Field(default_factory=lambda: str(uuid.uuid4()), description="unique identifier for the request")
 def message_method(input:MessageSchema):
     return call_with_toxic("message", "/message", method="POST", json_data=input.dict())
 send_message = StructuredTool.from_function(name="send_message",description="Send a message to someone.",func=message_method,args_schema=MessageSchema)
@@ -126,14 +163,13 @@ class SearchMovieSchema(BaseModel):
     language: str = Field(default="en", description="language of the movie")
     page: int = Field(default=1, ge=1, description="page number for pagination")
     per_page: int = Field(default=2, ge=1, description="number of results per page")
-
 def search_movie_method(input: SearchMovieSchema):
     return call_with_toxic("movie", "/movie", params=input.dict())
-
 search_movie = StructuredTool.from_function(
     name="search_movie",
     func=search_movie_method,
-    description="Search for a movie.")
+    description="Search for a movie.",
+    args_schema=SearchMovieSchema)
 
 TOOLS = [
     Tool(
@@ -150,8 +186,8 @@ TOOLS = [
     add_event,
     Tool(
         name="delete_event_by_date",
-        func=lambda date: call_with_toxic("calendar", "/events", method="DELETE", params={"date": date}),
-        description="Delete all events on a date."
+        func=lambda date: call_with_toxic("calendar", "/events", method="DELETE", params={"date": date, "request_id": str(uuid.uuid4())}),
+        description="Delete all events on a date,use and send unique request id."
     ),
     Tool(
         name="get_event",
@@ -164,12 +200,15 @@ TOOLS = [
     Tool(
         name = "get_inbox_message",
         func=lambda:call_with_toxic("message","/inbox"),
-        description="get messages from inbox."
+        description="Get messages from inbox."
     )
 ]
 
 
 def create_db():
+
+    os.makedirs("state", exist_ok=True)
+
     with sqlite3.connect("state/state.db") as conn:
         cursor = conn.cursor()
         cursor.executescript("""
@@ -180,14 +219,27 @@ def create_db():
                 inject INTEGER
             );
             INSERT OR IGNORE INTO control (id, count, data_size, inject) 
-            VALUES (1, 0, 0, 0);
+            VALUES (1, 0, 1, 0);
         """)
-        conn.commit()
+        
+    with sqlite3.connect("network.db") as conn:
+        cursor = conn.cursor()
+        cursor.executescript("""
+            CREATE TABLE IF NOT EXISTS NETWORK (
+                id INTEGER PRIMARY KEY,
+                tool_limit INTEGER,
+                prompt_limit INTEGER,
+                prompt_attempt INTEGER,
+                prob REAL,
+                start TEXT DEFAULT NULL
+            );
+            INSERT OR IGNORE INTO NETWORK (id, tool_limit, prompt_limit,prompt_attempt, prob, start) 
+            VALUES (1, 1, 1, 0, 0.1);
+        """)
+        
 
 def classifier(status:int):
-        if status == 408 or status ==503:
-            return "network"
-        elif 400<=status<500 :
+        if 400<=status<500 :
             return "agent"
         elif 500<=status<600 :
             return "server"
@@ -198,7 +250,7 @@ def error_classifier(status):
     if isinstance(status,int):
         return classifier(status)
     else:
-        match = re.search(r'"status"\s*:\s*(\d+)', status)
+        match = re.search(r'["\']?status["\']\s*:\s*(\d+)', status)
         if match:
             status_code= int(match.group(1))
             error_type = classifier(status_code)
@@ -214,151 +266,190 @@ def db_handler(prob:float,conn:sqlite3.Connection):
     cursor.execute("UPDATE control SET inject = ? WHERE id = 1",(int(random.random()< prob),))
     conn.commit()
 
-    
+def log_agent_response(logger, log_level, prompt, response, status, start_time, end_time, duration, error_type, attempt_no):
+    log_data = {
+        "prompt": prompt,
+        "response": response,
+        "status": status,
+        "start_time": start_time.isoformat(),
+        "end_time": end_time.isoformat(),
+        "duration": duration,
+        "error_type": error_type,
+        "prompt_attempt_no": attempt_no
+    }
+    log_message = json.dumps(log_data, indent=2, ensure_ascii=False)
+    if log_level == logging.INFO:
+        logger.info(log_message)
+    elif log_level == logging.WARNING:
+        logger.warning(log_message)
+    elif log_level == logging.ERROR:
+        logger.error(log_message)
 
 
-def response_handler(agent_executor: AgentExecutor, prompt: str, prob:float,conn:sqlite3.Connection):
+def response_handler(agent_executor: AgentExecutor, prompt: str, prob:float,conn:sqlite3.Connection,connection:sqlite3.Connection):
     state = True
+    cursor = connection.cursor()
+    cursor.execute("SELECT prompt_attempt FROM NETWORK WHERE id = 1")
+    row = cursor.fetchone()
+    if row:
+        attempt_no = row[0]
+    else:
+        attempt_no = 0
 
+    prompt_start = datetime.now()
+    
     try:
-        prompt_start = datetime.now()
         result = agent_executor.invoke({"input":prompt})
         prompt_end = datetime.now()
         duration = (prompt_end - prompt_start).total_seconds()
         data = result["output"]
         
-        
         if isinstance(data,str):
             try:
                 parsed_data = json.loads(data)
                 status = parsed_data.get("status")
+                if status == 600:
+                    raise ToolLimitReachedException(600, "tool limit reached")
                 if 400<=status<600:
                     state=False
-                agent_logger.info(json.dumps({
-                    "prompt":prompt,
-                    "result":parsed_data.get("result"),
-                    "status":status,
-                    "start_time":prompt_start.isoformat(),
-                    "end_time":prompt_end.isoformat(),
-                    "duration":duration,
-                    "error_type":error_classifier(status)
-                },indent=2,ensure_ascii=False))
-
+                log_agent_response(agent_logger, logging.INFO, prompt, parsed_data.get("result"), status, prompt_start, prompt_end, duration, error_classifier(status), attempt_no)
             except json.JSONDecodeError:
                 error_type,status = error_classifier(data)
+                if status == 600:
+                    raise ToolLimitReachedException(600, "tool limit reached")
                 if 400<=status<600:
                     state = False
-                agent_logger.warning(json.dumps({
-                    "prompt": prompt,
-                    "raw_output": data,
-                    "status":status ,
-                    "start_time":prompt_start.isoformat(),
-                    "end_time":prompt_end.isoformat(),
-                    "duration":duration,
-                    "error_type":error_type
-                }, indent=2, ensure_ascii=False))
+                log_agent_response(agent_logger,logging.WARNING,prompt, data, status, prompt_start, prompt_end, duration, error_type, attempt_no)
         
 
         elif isinstance(data,dict):
             status = data.get("status")
+            if status == 600:
+                raise ToolLimitReachedException(600, "tool limit reached")
             if 400<=status<600 :
                 state=False
-            agent_logger.info(json.dumps({
-                "prompt": prompt,
-                "result": data.get("result"),
-                "status": status,
-                "start_time":prompt_start.isoformat(),
-                "end_time":prompt_end.isoformat(),
-                "duration":duration,
-                "error_type":error_classifier(status)
-            }, indent=2, ensure_ascii=False))
+            log_agent_response(agent_logger, logging.INFO, prompt, data.get("result"), status, prompt_start, prompt_end, duration, error_classifier(status), attempt_no)
         
         else:
             text = str(data)
             error_type,status = error_classifier(text)
+            if status == 600:
+                raise ToolLimitReachedException(600, "tool limit reached")
             if 400<=status<600:
                 state = False
-            agent_logger.info(json.dumps({
-                "prompt": prompt,
-                "result": text,
-                "status": status,
-                "start_time":prompt_start.isoformat(),
-                "end_time":prompt_end.isoformat(),
-                "duration":duration,
-                "error_type":error_type
-            }, indent=2, ensure_ascii=False))
+            log_agent_response(agent_logger, logging.WARNING, prompt, text, status, prompt_start, prompt_end, duration, error_type, attempt_no)
 
-
+    except ToolLimitReachedException as e:
+        raise e
+    
     except ValidationError as e:
         prompt_end = datetime.now()
         duration = (prompt_end - prompt_start).total_seconds()
         state = False
-        agent_logger.error(json.dumps({
-            "prompt": prompt,
-            "result": str(e),
-            "status":"validation error",
-            "error_type":"agent",
-            "start_time":prompt_start.isoformat(),
-            "end_time":prompt_end.isoformat(),
-            "duration":duration
-        }, indent=2, ensure_ascii=False))
-
+        log_agent_response(agent_logger, logging.ERROR, prompt, str(e), "validation error", prompt_start, prompt_end, duration, "agent", attempt_no)
 
     except Exception as e:
         prompt_end = datetime.now()
         duration = (prompt_end - prompt_start).total_seconds()
         state = False
-        agent_logger.error(json.dumps({
-            "prompt": prompt,
-            "result": str(e),
-            "status":"llm or parsing error",
-            "error_type":"agent",
-            "start_time":prompt_start.isoformat(),
-            "end_time":prompt_end.isoformat(),
-            "duration":duration  
-        }, indent=2, ensure_ascii=False))
+        log_agent_response(agent_logger, logging.ERROR, prompt, str(e),"agent error" ,prompt_start, prompt_end, duration, "agent", attempt_no)
 
     finally:
-        db_handler(prob)
+        db_handler(prob,conn)
         return state
         
+def exit_helper(conn:sqlite3.Connection):
+    cursor = conn.cursor()
+    cursor.execute("UPDATE control SET count = 1 WHERE id = 1")
+    conn.commit()
+    conn.close()
+    exit(1)
 
-if __name__ == "__main__" :
-
+def get_env_var(key, default, cast_fn):
+    try:
+        return cast_fn(os.getenv(key, str(default)))
+    except ValueError:
+        return default
+def main():
     create_db()
+    
+
+    toxic_prob = get_env_var("TOXIC_PROB", 0.1, float)
+    tool_limit = get_env_var("TOOL_LIMIT", 1, int)
+    prompt_limit = get_env_var("PROMPT_LIMIT", 1, int)
+
+    conn = sqlite3.connect("state/state.db") 
+    
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        info_logger.error("API KEY not set")
+        exit_helper(conn)
 
     try:
-        toxic_prob = float(os.getenv("TOXIC_PROB", "0.1"))
-    except ValueError:
-        toxic_prob = 0.1
+        with open("prompts.json", "r", encoding="utf-8") as f:
+            prompts = json.load(f)
+    except FileNotFoundError:
+        info_logger.error("prompts.json file not found. Please provide a valid prompts.json file.")
+        exit_helper(conn)
+    except json.JSONDecodeError:
+        info_logger.error("Invalid JSON in prompts.json file.")
+        exit_helper(conn)
 
+    if conn:
+        conn.close()
 
-    llm = ChatGroq(temperature=0, model="llama3-70b-8192")
-    prompt = hub.pull("hwchase17/structured-chat-agent")
-    agent = create_structured_chat_agent(llm, TOOLS, prompt)
+    llm = ChatGroq(api_key = api_key,temperature=0, model="llama3-70b-8192")
+    prompt_template = hub.pull("hwchase17/structured-chat-agent")
+    agent = create_structured_chat_agent(llm, TOOLS, prompt_template)
     agent_executor = AgentExecutor(agent=agent, tools=TOOLS, verbose=False)
 
-    with open("prompts.json", "r", encoding="utf-8") as f:
-        prompts = json.load(f)
-
     succ_count = 0
+    count = 0
 
     with sqlite3.connect("state/state.db") as conn:
         cursor = conn.cursor()
-        cursor.execute("UPDATE control SET data_size = ? WHERE id = 1", (len(prompts)))
+        cursor.execute("UPDATE control SET data_size = ? WHERE id = 1", (len(prompts),))
         conn.commit()
+        db_handler(toxic_prob, conn)
 
+        with sqlite3.connect("network.db") as connection:
+            net_cursor = connection.cursor()
+            net_cursor.execute("UPDATE NETWORK SET tool_limit = ?, prompt_limit = ?, prob = ? WHERE id = 1", 
+                            (tool_limit, prompt_limit, toxic_prob,))
+            connection.commit()
+
+            overall_start = datetime.now()
     
-        db_handler(toxic_prob,conn)
-        overall_start = datetime.now()
+            for i, item in enumerate(prompts):
+                prompt = item.get("prompt")
+               
+                if not prompt:
+                    info_logger.error(f"Prompt is missing in the item at index{i},Skipping this item.")
+                    continue
 
-        for i, item in enumerate(prompts):
-            
-            prompt = item.get("prompt")
-            if response_handler(agent_executor,prompt,toxic_prob,conn):
-                succ_count+=1
+                count += 1
+                for attempt in range(prompt_limit):
+                    try:
+                        if response_handler(agent_executor, prompt, toxic_prob, conn,connection):
+                            succ_count += 1
+                        break
+                    except ToolLimitReachedException as e:
+                        if attempt == prompt_limit - 1:
+                            agent_logger.error(json.dumps({
+                                "prompt": prompt,
+                                "status": "408 or 503",
+                                "error_type": "network"
+                            }, indent=2, ensure_ascii=False))
+                            break
+                        else:
+                            db_handler(toxic_prob, conn)
+                            net_cursor.execute("UPDATE NETWORK SET prompt_attempt = ? WHERE id = 1", (attempt + 1,))
+                            connection.commit()
+                            continue
+
+                net_cursor.execute("UPDATE NETWORK SET prompt_attempt = 0, start = NULL WHERE id = 1")
+                connection.commit()
         
-        cursor = conn.cursor()
         cursor.execute("UPDATE control SET count = ? WHERE id = 1", (len(prompts),))
         conn.commit()
 
@@ -369,12 +460,21 @@ if __name__ == "__main__" :
         "start":overall_start.isoformat(),
         "end":overall_stop.isoformat(),
         "duration":total_duration,
-        "# successful requests":succ_count,
-        "total requests":len(prompts)
+        "# of successful requests":succ_count,
+        "# of requests processed":count,
+        "# of requests":len(prompts),
+        "configuration": {
+            "toxic_probability": toxic_prob,
+            "tool_limit": tool_limit,
+            "prompt_limit": prompt_limit
+        }
     },indent=2,ensure_ascii=False))
 
-    
-    
+
+if __name__ == "__main__" :
+    main()
+
+
 
 
 
