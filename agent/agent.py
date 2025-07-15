@@ -42,8 +42,10 @@ PROXY ={
 }
 
 class ToolLimitReachedException(Exception):
-    def __init__(self, status_code,message):
+    def __init__(self, status_code,start_time,end_time,message):
         self.status_code = status_code
+        self.start_time = start_time
+        self.end_time = end_time
         self.message = message
         super().__init__(message)
 
@@ -295,7 +297,7 @@ def response_handler(agent_executor: AgentExecutor, prompt: str, prob:float,conn
         attempt_no = row[0]
     else:
         attempt_no = 0
-
+,
     prompt_start = datetime.now()
     
     try:
@@ -309,14 +311,14 @@ def response_handler(agent_executor: AgentExecutor, prompt: str, prob:float,conn
                 parsed_data = json.loads(data)
                 status = parsed_data.get("status")
                 if status == 600:
-                    raise ToolLimitReachedException(600, "tool limit reached")
+                    raise ToolLimitReachedException(600,prompt_start,prompt_end,"tool limit reached for prompt attempt "+str(attempt_no))
                 if 400<=status<600:
                     state=False
                 log_agent_response(agent_logger, logging.INFO, prompt, parsed_data.get("result"), status, prompt_start, prompt_end, duration, error_classifier(status), attempt_no)
             except json.JSONDecodeError:
                 error_type,status = error_classifier(data)
                 if status == 600:
-                    raise ToolLimitReachedException(600, "tool limit reached")
+                    raise ToolLimitReachedException(600,prompt_start,prompt_end,"tool limit reached for prompt attempt "+str(attempt_no))
                 if 400<=status<600:
                     state = False
                 log_agent_response(agent_logger,logging.WARNING,prompt, data, status, prompt_start, prompt_end, duration, error_type, attempt_no)
@@ -325,7 +327,7 @@ def response_handler(agent_executor: AgentExecutor, prompt: str, prob:float,conn
         elif isinstance(data,dict):
             status = data.get("status")
             if status == 600:
-                raise ToolLimitReachedException(600, "tool limit reached")
+                raise ToolLimitReachedException(600,prompt_start,prompt_end,"tool limit reached for prompt attempt "+str(attempt_no))
             if 400<=status<600 :
                 state=False
             log_agent_response(agent_logger, logging.INFO, prompt, data.get("result"), status, prompt_start, prompt_end, duration, error_classifier(status), attempt_no)
@@ -334,14 +336,12 @@ def response_handler(agent_executor: AgentExecutor, prompt: str, prob:float,conn
             text = str(data)
             error_type,status = error_classifier(text)
             if status == 600:
-                raise ToolLimitReachedException(600, "tool limit reached")
+                raise ToolLimitReachedException(600,prompt_start,prompt_end,"tool limit reached for prompt attempt "+str(attempt_no))
             if 400<=status<600:
                 state = False
             log_agent_response(agent_logger, logging.WARNING, prompt, text, status, prompt_start, prompt_end, duration, error_type, attempt_no)
 
-    except ToolLimitReachedException as e:
-        raise e
-    
+
     except ValidationError as e:
         prompt_end = datetime.now()
         duration = (prompt_end - prompt_start).total_seconds()
@@ -379,7 +379,7 @@ def main():
     prompt_limit = get_env_var("PROMPT_LIMIT", 1, int)
 
     conn = sqlite3.connect("state/state.db") 
-    
+
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
         info_logger.error("API KEY not set")
@@ -435,20 +435,32 @@ def main():
                         break
                     except ToolLimitReachedException as e:
                         if attempt == prompt_limit - 1:
+                            
+                            duration = (e.end_time - e.start_time).total_seconds() if e.start_time and e.end_time else 0
                             agent_logger.error(json.dumps({
                                 "prompt": prompt,
                                 "status": "408 or 503",
-                                "error_type": "network"
+                                "start_time": e.start_time.isoformat() if e.start_time else None,
+                                "end_time": e.end_time.isoformat() if e.end_time else None,
+                                "duration": duration,
+                                "error_type": "network",
+                                "prompt_attempt_no": prompt_limit
                             }, indent=2, ensure_ascii=False))
                             break
                         else:
-                            db_handler(toxic_prob, conn)
                             net_cursor.execute("UPDATE NETWORK SET prompt_attempt = ? WHERE id = 1", (attempt + 1,))
                             connection.commit()
                             continue
 
                 net_cursor.execute("UPDATE NETWORK SET prompt_attempt = 0, start = NULL WHERE id = 1")
                 connection.commit()
+                info_logger.info(json.dumps({
+                "event_type": "request_processed",
+                "timestamp": datetime.now().isoformat(),
+                "processed_count": count,
+                "success_count": succ_count,
+                "prompt_index": i
+                }, indent=2, ensure_ascii=False))
         
         cursor.execute("UPDATE control SET count = ? WHERE id = 1", (len(prompts),))
         conn.commit()
@@ -462,7 +474,7 @@ def main():
         "duration":total_duration,
         "# of successful requests":succ_count,
         "# of requests processed":count,
-        "# of requests":len(prompts),
+        "# of requests recieved":len(prompts),
         "configuration": {
             "toxic_probability": toxic_prob,
             "tool_limit": tool_limit,
