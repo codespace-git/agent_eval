@@ -13,6 +13,7 @@ from langchain_core.tools import Tool,StructuredTool
 from langchain_groq import ChatGroq
 from langchain import hub
 
+from dbmanager import AgentDataBaseManager
 from datetime import datetime
 from pydantic import BaseModel,ValidationError,Field
 
@@ -53,68 +54,64 @@ def call_with_toxic(tool_name, endpoint, method="GET", params=None, json_data=No
     proxy = PROXY[tool_name]
     url = f"http://toxiproxy:{proxy}{endpoint}"
     tool_attempts = 0
-
-    with sqlite3.connect("state/state.db") as conn,sqlite3.connect("network.db") as connection:
-        cursor = connection.cursor()
-        cursor.execute("SELECT tool_limit, prompt_limit,prompt_attempt, prob,start FROM NETWORK WHERE id = 1")
-        row = cursor.fetchone()
-
-        if row:
-            tool_limit, prompt_limit,prompt_attempt,prob, start = row
-            if not start:
-                start = datetime.now().isoformat()
-                cursor.execute("UPDATE NETWORK SET start = ? WHERE id = 1", (start,))
-                connection.commit()
-        else:
-            tool_limit, prompt_limit,prompt_attempt,prob, start = 1, 1 ,0, 0.1,datetime.now().isoformat()
-
-        while tool_attempts < tool_limit:
-            try:
-                 
-                if method == "GET":
-                    res = requests.get(url, params=params or {}, timeout=5)
-                elif method == "POST":
-                    res = requests.post(url, json=json_data or {}, timeout=5)
-                elif method == "DELETE":
-                    res = requests.delete(url, params=params or {}, timeout=5)
-
-                network_end = datetime.now()
-                network_start = datetime.fromisoformat(start)
-                network_latency = (network_end - network_start).total_seconds()
-                total_attempts = (tool_limit*prompt_attempt)+tool_attempts + 1
-
-                info_logger.info(json.dumps({
-                    "tool":tool_name,
-                    "network_start":start,
-                    "network_end":network_end.isoformat(),
-                    "network_latency": network_latency,
-                    "total_tool_attempts": total_attempts
-                },indent=2,ensure_ascii = False))
-
-                
-                final = {
-                "result": res.json(),
-                "status": res.status_code
-                }
-                return final
-                
-            except (requests.exceptions.Timeout,requests.exceptions.ConnectionError) as e:
-                tool_attempts += 1
-                
-                if isinstance(e, requests.exceptions.Timeout):
-                    info_logger.error(f"{tool_name} timed out at endpoint {endpoint} after {tool_attempts} tool attempts in {prompt_attempt} prompt attempts")
-                else:
-                    info_logger.error(f"Connection aborted with {tool_name} at endpoint {endpoint} after {tool_attempts} tool attempts in {prompt_attempt} prompt attempts")
-
-                if tool_attempts >= tool_limit:
-                    return {"result": "Tool limit exceeded", "status": 600}
+    db_manager = AgentDatabaseManager("state/state.db","network.db")
+    row = db_manager.get_network_state()
     
-                db_handler(prob, conn)
-                continue
+    if row:
+        tool_limit, prompt_limit,prompt_attempt,prob,start = row
+        if not start:
+            start = datetime.now().isoformat()
+            db_manager.update_network_start(start)
+    else:
+        tool_limit, prompt_limit,prompt_attempt,prob, start = 1, 1 ,0, 0.1,datetime.now().isoformat()
+
+    while tool_attempts < tool_limit:
+        try:
+                 
+            if method == "GET":
+                res = requests.get(url, params=params or {}, timeout=5)
+            elif method == "POST":
+                res = requests.post(url, json=json_data or {}, timeout=5)
+            elif method == "DELETE":
+                res = requests.delete(url, params=params or {}, timeout=5)
+
+            network_end = datetime.now()
+            network_start = datetime.fromisoformat(start)
+            network_latency = (network_end - network_start).total_seconds()
+            total_attempts = (tool_limit*prompt_attempt)+tool_attempts + 1
+
+            info_logger.info(json.dumps({
+                "tool":tool_name,
+                "network_start":start,
+                "network_end":network_end.isoformat(),
+                "network_latency": network_latency,
+                "total_tool_attempts": total_attempts
+            },indent=2,ensure_ascii = False))
+   
+            final = {
+            "result": res.json(),
+            "status": res.status_code
+            }
+
+            return final
                 
-            except Exception as e:
-                info_logger.error(f"{tool_name} failed: {str(e)}")
-                return {"result": str(e),"status":500}
+        except (requests.exceptions.Timeout,requests.exceptions.ConnectionError) as e:
+            tool_attempts += 1
+            
+            if tool_attempts >= tool_limit:
+                return {"result": "Tool limit exceeded", "status": 600}
+
+            if isinstance(e, requests.exceptions.Timeout):
+                info_logger.error(f"{tool_name} timed out at endpoint {endpoint} after {tool_attempts} tool attempts in {prompt_attempt} prompt attempts")
+            elif isinstance(e,requests.exceptions.ConnectionError):
+                info_logger.error(f"Connection aborted with {tool_name} at endpoint {endpoint} after {tool_attempts} tool attempts in {prompt_attempt} prompt attempts")
+
+            db_manager.update_control_inject(int(random.random() < prob))
+            continue
+                
+        except Exception as e:
+            info_logger.error(f"{tool_name} failed: {str(e)}")
+            return {"result": str(e),"status":500}
         
         
 
@@ -151,6 +148,7 @@ calculate_expr = StructuredTool.from_function(name="calculate_expr",func = calcu
 
 
 
+
 class MessageSchema(BaseModel):
     to : str = Field(description="name of the person to send message to")
     body : str =Field(description="content of the message")
@@ -160,6 +158,7 @@ def message_method(input:MessageSchema):
 send_message = StructuredTool.from_function(name="send_message",description="Send a message to someone.",func=message_method,args_schema=MessageSchema)
 
 
+
 class SearchMovieSchema(BaseModel):
     query: str = Field(description="name of the movie to search for")
     language: str = Field(default="en", description="language of the movie")
@@ -167,11 +166,8 @@ class SearchMovieSchema(BaseModel):
     per_page: int = Field(default=2, ge=1, description="number of results per page")
 def search_movie_method(input: SearchMovieSchema):
     return call_with_toxic("movie", "/movie", params=input.dict())
-search_movie = StructuredTool.from_function(
-    name="search_movie",
-    func=search_movie_method,
-    description="Search for a movie.",
-    args_schema=SearchMovieSchema)
+search_movie = StructuredTool.from_function(name="search_movie",func=search_movie_method,description="Search for a movie.",args_schema=SearchMovieSchema)
+
 
 TOOLS = [
     Tool(
@@ -207,38 +203,10 @@ TOOLS = [
 ]
 
 
-def create_db():
-
+def create_dbs(db_manager:AgentDataBaseManager):
     os.makedirs("state", exist_ok=True)
-
-    with sqlite3.connect("state/state.db") as conn:
-        cursor = conn.cursor()
-        cursor.executescript("""
-            CREATE TABLE IF NOT EXISTS control (
-                id INTEGER PRIMARY KEY,
-                count INTEGER,
-                data_size INTEGER,
-                inject INTEGER
-            );
-            INSERT OR IGNORE INTO control (id, count, data_size, inject) 
-            VALUES (1, 0, 1, 0);
-        """)
-        
-    with sqlite3.connect("network.db") as conn:
-        cursor = conn.cursor()
-        cursor.executescript("""
-            CREATE TABLE IF NOT EXISTS NETWORK (
-                id INTEGER PRIMARY KEY,
-                tool_limit INTEGER,
-                prompt_limit INTEGER,
-                prompt_attempt INTEGER,
-                prob REAL,
-                start TEXT DEFAULT NULL
-            );
-            INSERT OR IGNORE INTO NETWORK (id, tool_limit, prompt_limit,prompt_attempt, prob, start) 
-            VALUES (1, 1, 1, 0, 0.1);
-        """)
-        
+    os.makedirs("network",exist_ok = True)
+    db_manager._init_dbs()
 
 def classifier(status:int):
         if 400<=status<500 :
@@ -252,7 +220,7 @@ def error_classifier(status):
     if isinstance(status,int):
         return classifier(status)
     else:
-        match = re.search(r'["\']?status["\']\s*:\s*(\d+)', status)
+        match = re.search(r'["\']?status["\']\s*:\s*(\d+)', str(status))
         if match:
             status_code= int(match.group(1))
             error_type = classifier(status_code)
@@ -260,51 +228,43 @@ def error_classifier(status):
         else:
             return "could not resolve error type",599
     
-    
 
-
-def db_handler(prob:float,conn:sqlite3.Connection):
-    cursor = conn.cursor()
-    cursor.execute("UPDATE control SET inject = ? WHERE id = 1",(int(random.random()< prob),))
-    conn.commit()
-
-def log_agent_response(logger, log_level, prompt, response, status, start_time, end_time, duration, error_type, attempt_no):
+def log_agent_response(log_level, prompt, response, status, start_time, end_time, duration, error_type, attempt_no):
     log_data = {
         "prompt": prompt,
         "response": response,
         "status": status,
-        "start_time": start_time.isoformat(),
-        "end_time": end_time.isoformat(),
+        "start_time": start_time.isoformat() if start_time else "",
+        "end_time": end_time.isoformat() if end_time else "",
         "duration": duration,
         "error_type": error_type,
         "prompt_attempt_no": attempt_no
     }
     log_message = json.dumps(log_data, indent=2, ensure_ascii=False)
+
     if log_level == logging.INFO:
-        logger.info(log_message)
+        agent_logger.info(log_message)
     elif log_level == logging.WARNING:
-        logger.warning(log_message)
+        agent_logger.warning(log_message)
     elif log_level == logging.ERROR:
-        logger.error(log_message)
+        agent_logger.error(log_message)
 
 
-def response_handler(agent_executor: AgentExecutor, prompt: str, prob:float,conn:sqlite3.Connection,connection:sqlite3.Connection):
+def response_handler(agent_executor: AgentExecutor, prompt: str, prob:float,db_manager:AgentDatabaseManager):
     state = True
-    cursor = connection.cursor()
-    cursor.execute("SELECT prompt_attempt FROM NETWORK WHERE id = 1")
-    row = cursor.fetchone()
+    row = db_manager.get_network_state()
     if row:
-        attempt_no = row[0]
+        attempt_no = row[2] + 1
     else:
-        attempt_no = 0
-,
+        attempt_no = 1
+
     prompt_start = datetime.now()
     
     try:
         result = agent_executor.invoke({"input":prompt})
         prompt_end = datetime.now()
         duration = (prompt_end - prompt_start).total_seconds()
-        data = result["output"]
+        data = result.get("output")
         
         if isinstance(data,str):
             try:
@@ -314,14 +274,15 @@ def response_handler(agent_executor: AgentExecutor, prompt: str, prob:float,conn
                     raise ToolLimitReachedException(600,prompt_start,prompt_end,"tool limit reached for prompt attempt "+str(attempt_no))
                 if 400<=status<600:
                     state=False
-                log_agent_response(agent_logger, logging.INFO, prompt, parsed_data.get("result"), status, prompt_start, prompt_end, duration, error_classifier(status), attempt_no)
+                log_agent_response(logging.INFO, prompt, parsed_data.get("result"), status, prompt_start, prompt_end, duration, error_classifier(status), attempt_no)
+
             except json.JSONDecodeError:
                 error_type,status = error_classifier(data)
                 if status == 600:
                     raise ToolLimitReachedException(600,prompt_start,prompt_end,"tool limit reached for prompt attempt "+str(attempt_no))
                 if 400<=status<600:
                     state = False
-                log_agent_response(agent_logger,logging.WARNING,prompt, data, status, prompt_start, prompt_end, duration, error_type, attempt_no)
+                log_agent_response(logging.WARNING,prompt, data, status, prompt_start, prompt_end, duration, error_type, attempt_no)
         
 
         elif isinstance(data,dict):
@@ -330,7 +291,7 @@ def response_handler(agent_executor: AgentExecutor, prompt: str, prob:float,conn
                 raise ToolLimitReachedException(600,prompt_start,prompt_end,"tool limit reached for prompt attempt "+str(attempt_no))
             if 400<=status<600 :
                 state=False
-            log_agent_response(agent_logger, logging.INFO, prompt, data.get("result"), status, prompt_start, prompt_end, duration, error_classifier(status), attempt_no)
+            log_agent_response(logging.INFO, prompt, data.get("result"), status, prompt_start, prompt_end, duration, error_classifier(status), attempt_no)
         
         else:
             text = str(data)
@@ -339,30 +300,27 @@ def response_handler(agent_executor: AgentExecutor, prompt: str, prob:float,conn
                 raise ToolLimitReachedException(600,prompt_start,prompt_end,"tool limit reached for prompt attempt "+str(attempt_no))
             if 400<=status<600:
                 state = False
-            log_agent_response(agent_logger, logging.WARNING, prompt, text, status, prompt_start, prompt_end, duration, error_type, attempt_no)
+            log_agent_response(logging.WARNING, prompt, text, status, prompt_start, prompt_end, duration, error_type, attempt_no)
 
 
     except ValidationError as e:
         prompt_end = datetime.now()
         duration = (prompt_end - prompt_start).total_seconds()
         state = False
-        log_agent_response(agent_logger, logging.ERROR, prompt, str(e), "validation error", prompt_start, prompt_end, duration, "agent", attempt_no)
+        log_agent_response(logging.ERROR, prompt, str(e), "validation error", prompt_start, prompt_end, duration, "agent", attempt_no)
 
     except Exception as e:
         prompt_end = datetime.now()
         duration = (prompt_end - prompt_start).total_seconds()
         state = False
-        log_agent_response(agent_logger, logging.ERROR, prompt, str(e),"agent error" ,prompt_start, prompt_end, duration, "agent", attempt_no)
+        log_agent_response(logging.ERROR, prompt, str(e),"agent error" ,prompt_start, prompt_end, duration, "agent", attempt_no)
 
     finally:
-        db_handler(prob,conn)
+        db_manager.update_control_inject(int(random.random() < prob))
         return state
         
-def exit_helper(conn:sqlite3.Connection):
-    cursor = conn.cursor()
-    cursor.execute("UPDATE control SET count = 1 WHERE id = 1")
-    conn.commit()
-    conn.close()
+def exit_helper(db_manager: AgentDatabaseManager):
+    db_manager.update_control_inject(1)
     exit(1)
 
 def get_env_var(key, default, cast_fn):
@@ -370,33 +328,34 @@ def get_env_var(key, default, cast_fn):
         return cast_fn(os.getenv(key, str(default)))
     except ValueError:
         return default
+
 def main():
-    create_db()
+
+    db_manager = AgentDatabaseManager("state/state.db","network.db")
+    create_dbs(db_manager)
     
 
     toxic_prob = get_env_var("TOXIC_PROB", 0.1, float)
     tool_limit = get_env_var("TOOL_LIMIT", 1, int)
     prompt_limit = get_env_var("PROMPT_LIMIT", 1, int)
 
-    conn = sqlite3.connect("state/state.db") 
-
-    api_key = os.getenv("GROQ_API_KEY")
+    
+    api_key = os.getenv("GROQ_API_KEY",None)
     if not api_key:
         info_logger.error("API KEY not set")
-        exit_helper(conn)
+        exit_helper(db_manager)
 
     try:
         with open("prompts.json", "r", encoding="utf-8") as f:
             prompts = json.load(f)
     except FileNotFoundError:
         info_logger.error("prompts.json file not found. Please provide a valid prompts.json file.")
-        exit_helper(conn)
+        exit_helper(db_manager)
     except json.JSONDecodeError:
         info_logger.error("Invalid JSON in prompts.json file.")
-        exit_helper(conn)
+        exit_helper(db_manager)
 
-    if conn:
-        conn.close()
+    
 
     llm = ChatGroq(api_key = api_key,temperature=0, model="llama3-70b-8192")
     prompt_template = hub.pull("hwchase17/structured-chat-agent")
@@ -406,64 +365,49 @@ def main():
     succ_count = 0
     count = 0
 
-    with sqlite3.connect("state/state.db") as conn:
-        cursor = conn.cursor()
-        cursor.execute("UPDATE control SET data_size = ? WHERE id = 1", (len(prompts),))
-        conn.commit()
-        db_handler(toxic_prob, conn)
-
-        with sqlite3.connect("network.db") as connection:
-            net_cursor = connection.cursor()
-            net_cursor.execute("UPDATE NETWORK SET tool_limit = ?, prompt_limit = ?, prob = ? WHERE id = 1", 
-                            (tool_limit, prompt_limit, toxic_prob,))
-            connection.commit()
-
-            overall_start = datetime.now()
+    db_manager.set_data_size(len(prompts))
+    db_manager.update_control_inject(int(random.random() < toxic_prob))
+    db_manager.set_network_config(tool_limit, prompt_limit, toxic_prob)
     
-            for i, item in enumerate(prompts):
-                prompt = item.get("prompt")
-               
-                if not prompt:
-                    info_logger.error(f"Prompt is missing in the item at index{i},Skipping this item.")
+    overall_start = datetime.now()
+
+    for i, item in enumerate(prompts):
+        prompt = item.get("prompt")       
+        if not prompt :
+            info_logger.error(f"Prompt is missing in the item at index{i},Skipping this item.")
+            continue
+        if not isinstance(prompt,str) :
+            info_logger.error(f"Prompt in the item at index {i} is not a string,Skipping this item.")
+            continue    
+        count += 1
+        for attempt in range(prompt_limit):
+            try:
+                if response_handler(agent_executor, prompt, toxic_prob, db_manager):
+                    succ_count += 1
+                break
+            except ToolLimitReachedException as e:
+                if attempt == prompt_limit - 1:         
+                    duration = (e.end_time - e.start_time).total_seconds() if e.start_time and e.end_time else 0
+                    start_time = e.start_time if e.start_time else None
+                    end_time = e.end_time if e.end_time else None
+                    log_agent_response(logging.ERROR,prompt,"",600,start_time,end_time,duration,"network",prompt_limit)
+                    break
+                else:
+                    db_manager.update_prompt_attempt(attempt + 1)
                     continue
 
-                count += 1
-                for attempt in range(prompt_limit):
-                    try:
-                        if response_handler(agent_executor, prompt, toxic_prob, conn,connection):
-                            succ_count += 1
-                        break
-                    except ToolLimitReachedException as e:
-                        if attempt == prompt_limit - 1:
-                            
-                            duration = (e.end_time - e.start_time).total_seconds() if e.start_time and e.end_time else 0
-                            agent_logger.error(json.dumps({
-                                "prompt": prompt,
-                                "status": "408 or 503",
-                                "start_time": e.start_time.isoformat() if e.start_time else None,
-                                "end_time": e.end_time.isoformat() if e.end_time else None,
-                                "duration": duration,
-                                "error_type": "network",
-                                "prompt_attempt_no": prompt_limit
-                            }, indent=2, ensure_ascii=False))
-                            break
-                        else:
-                            net_cursor.execute("UPDATE NETWORK SET prompt_attempt = ? WHERE id = 1", (attempt + 1,))
-                            connection.commit()
-                            continue
+        db_manager.update_prompt_attempt(0)
+        db_manager.update_network_start(None)
 
-                net_cursor.execute("UPDATE NETWORK SET prompt_attempt = 0, start = NULL WHERE id = 1")
-                connection.commit()
-                info_logger.info(json.dumps({
-                "event_type": "request_processed",
-                "timestamp": datetime.now().isoformat(),
-                "processed_count": count,
-                "success_count": succ_count,
-                "prompt_index": i
-                }, indent=2, ensure_ascii=False))
+        info_logger.info(json.dumps({
+        "prompt_index": i,
+        "event_type": "request_processed",
+        "timestamp": datetime.now().isoformat(),
+        "processed_count": count,
+        "success_count": succ_count
+        }, indent=2, ensure_ascii=False))
         
-        cursor.execute("UPDATE control SET count = ? WHERE id = 1", (len(prompts),))
-        conn.commit()
+    db_manager.update_control_count(len(prompts))
 
     overall_stop = datetime.now()
     total_duration = (overall_stop - overall_start).total_seconds()
