@@ -13,11 +13,7 @@ try:
 except ValueError:
     ERROR_PROB = 0.1
 
-try:
-    with open("movies.json", "r") as f :
-        MOVIES = json.load(f)
-except FileNotFoundError:
-    return jsonify({"message": "Movies data not available"}), 500
+MOVIES = []
 
 @app.route("/movie", methods=["GET"])
 def search_movie():
@@ -31,8 +27,18 @@ def search_movie():
 
     if not query :
         return jsonify({"warning": "Missing required parameter: query"}), 400
-
-   
+    
+    
+    try:
+        with open("movies.json", "r") as f:
+            MOVIES = json.load(f)
+    except FileNotFoundError:
+        return jsonify({"message": "Movies data not available"}), 200
+    except json.JSONDecodeError:
+        return jsonify({"message": "Error decoding movies data"}), 500
+    if not MOVIES:
+        return jsonify({"message": "No movies list found"}), 200
+    global MOVIES
     filtered = [
         movie for movie in MOVIES
         if query.lower() in movie.get("name","").lower() or query.lower() in movie.get("original_name","").lower()
