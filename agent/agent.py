@@ -5,7 +5,7 @@ import re
 import uuid
 import logging
 import requests
-import sqlite3
+
 
 from langchain.agents import AgentExecutor
 from langchain.agents.structured_chat.base import create_structured_chat_agent
