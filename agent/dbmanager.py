@@ -56,13 +56,13 @@ class AgentDataBaseManager:
     @contextlib.contextmanager
     def get_network_connection(self):
         
-    with self.network_lock:
-        conn = sqlite3.connect(self.network_db_path, timeout=30)
-        conn.execute("PRAGMA busy_timeout = 30000")
-        try:
-            yield conn
-        finally:
-            conn.close()
+        with self.network_lock:
+            conn = sqlite3.connect(self.network_db_path, timeout=30)
+            conn.execute("PRAGMA busy_timeout = 30000")
+            try:
+                yield conn
+            finally:
+                conn.close()
     
     def update_control_inject(self, inject_value):
        
