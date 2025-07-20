@@ -10,6 +10,7 @@ import (
     "syscall"
     "context"
     "fmt"
+    "net/http"
     
     toxiproxy "github.com/Shopify/toxiproxy/v2/client"
     _ "modernc.org/sqlite"
@@ -18,10 +19,12 @@ import (
 const (
     dbPath = "./state/state.db"
     baseClientURL = "toxiproxy:8474"
-    maxtries = 4
-    baseDelay = time.Second
+    maxtries = 3
     timeout_up = 4000
     timeout_down = 4000
+    eventPollInterval = 100 * time.Millisecond
+    baseDelay = 100 * time.Millisecond
+    healthCheckPort = ":8000" 
 )
 
 var proxyConfig = []struct {
@@ -44,6 +47,15 @@ type ProxyService struct {
     db     *sql.DB
     ctx    context.Context
     cancel context.CancelFunc
+}
+
+type Event struct {
+    ID        int
+    EventType string
+    OldValue  int
+    NewValue  int
+    Timestamp string
+    Processed int
 }
 
 func retryOperation(operation func() error) error {
@@ -102,15 +114,34 @@ func (ps *ProxyService) retryOperation(operation func() error) error {
 
 func (ps *ProxyService) initializeDatabase() error {
     query := `
+        PRAGMA journal_mode=WAL;
+        
         CREATE TABLE IF NOT EXISTS control (
             id INTEGER PRIMARY KEY,
             count INTEGER DEFAULT 0,
             data_size INTEGER DEFAULT 1,
             inject INTEGER DEFAULT 0
         );
+
         INSERT OR IGNORE INTO control (id, count, data_size, inject) 
         VALUES (1, 0, 1, 0);
-		PRAGMA journal_mode=WAL;
+
+        CREATE TABLE IF NOT EXISTS events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type TEXT NOT NULL,
+            old_value INTEGER,
+            new_value INTEGER,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            processed INTEGER DEFAULT 0
+        );
+        
+        CREATE TRIGGER IF NOT EXISTS inject_change_trigger
+        AFTER UPDATE OF inject ON control
+        WHEN NEW.inject != OLD.inject
+        BEGIN
+            INSERT INTO events (event_type, old_value, new_value)
+            VALUES ('inject_changed', OLD.inject, NEW.inject);
+        END;	
     `
     
     return ps.retryOperation(func() error {
@@ -135,26 +166,138 @@ func (ps *ProxyService) createProxies() error {
     return nil
 }
 
-func (ps *ProxyService) getState() (int, int, int, error) {
-    count, size, inject := 0, 1, 0
+
+
+func (ps *ProxyService) getState() (int, int, error) {
+    count, size := 0, 1
 
     err := ps.retryOperation(func() error {
-        return ps.db.QueryRow("SELECT count, data_size, inject FROM control WHERE id = 1").
-        Scan(&count, &size, &inject)
+        return ps.db.QueryRow("SELECT count, data_size FROM control WHERE id = 1").
+        Scan(&count, &size)
     })
-    
-    return count, size, inject, err
+
+    return count, size, err
 }
 
-func (ps *ProxyService) getDynamicInterval(count, size int) time.Duration {
-    switch {
-    case count == 0:
-        return 500* time.Millisecond
-    case count == size:
-        return 100 * time.Millisecond 
-    default:
-        return 2 * baseDelay
+func (ps *ProxyService) getEvents() ([]Event, error) {
+    var events []Event
+    
+    err := ps.retryOperation(func() error {
+        rows, err := ps.db.Query(`
+            SELECT id, event_type, old_value, new_value, timestamp, processed 
+            FROM events 
+            ORDER BY timestamp ASC
+        `)
+        if err != nil {
+            return err
+        }
+        defer rows.Close()
+        
+        events = nil 
+        for rows.Next() {
+            var event Event
+            err := rows.Scan(&event.ID, &event.EventType, &event.OldValue, &event.NewValue, &event.Timestamp, &event.Processed)
+            if err != nil {
+                return err
+            }
+            events = append(events, event)
+        }
+        return rows.Err()
+    })
+    
+    return events, err
+}
+func (ps *ProxyService) getEvents() ([]Event, error) {
+    var events []Event
+    
+    err := ps.retryOperation(func() error {
+       
+        tx, err := ps.db.Begin()
+        if err != nil {
+            return fmt.Errorf("failed to begin transaction: %w", err)
+        }
+        defer tx.Rollback()
+
+
+        rows, err := tx.Query(`
+            SELECT id, event_type, old_value, new_value, timestamp, processed 
+            FROM events 
+            ORDER BY timestamp ASC
+        `)
+        if err != nil {
+            return err
+        }
+        defer rows.Close()
+        
+        events = nil 
+        var err error
+        for rows.Next() {
+            var event Event
+            var err error
+            err = rows.Scan(&event.ID, &event.EventType, &event.OldValue, 
+                           &event.NewValue, &event.Timestamp, &event.Processed)
+            if err != nil {
+                return err
+            }
+            events = append(events, event)
+        }
+        
+        if err = rows.Err(); err != nil {
+            return err
+        }
+
+     
+        return tx.Commit()
+    })
+    
+    return events, err
+}
+func (ps *ProxyService) removeEvents(eventID int) error {
+    return ps.retryOperation(func() error {
+        _, err := ps.db.Exec("DELETE FROM events WHERE id = ?", eventID)
+        return err
+    })
+}
+func (ps *ProxyService) processEvents() error {
+    events, err := ps.getEvents()
+    if err != nil {
+        return fmt.Errorf("failed to fetch events: %w", err)
     }
+    if len(events) == 0 {
+        return nil 
+    }   
+
+    var err error
+    for _, event := range events {
+        if event.Processed == 0 {
+            log.Printf("Processing event: %v", event)
+            switch event.EventType {
+            case "inject_changed":
+                if event.NewValue == 1 {
+                    ps.injectToxics()
+            } else {
+                ps.removeToxics()
+            }
+            default:
+                log.Printf("Unknown event type: %s", event.EventType)
+        }
+        var err error
+        err = ps.retryOperation(func() error {
+            var err error
+            _, err = ps.db.Exec("UPDATE events SET processed = 1 WHERE id = ?", event.ID)
+            return err
+        })
+        if err != nil {
+            log.Printf("Failed to mark event %d as processed: %v", event.ID, err)
+        }
+    }
+
+        if err = ps.removeEvents(event.ID); err != nil {
+            log.Printf("Failed to remove event %d: %v", event.ID, err)
+        }
+        
+    }
+    return nil
 }
 
 func (ps *ProxyService) removeToxicsForProxy(proxy *toxiproxy.Proxy) {
@@ -278,35 +421,51 @@ func (ps *ProxyService) Run() error {
             return nil
             
         default:
-            count, size, inject, err := ps.getState()
+            if err := ps.processEvents(); err != nil {
+                log.Printf("Failed to process events: %v", err)
+            }
+
+            count, size, err := ps.getState()
             if err != nil {
                 return fmt.Errorf("failed to fetch state of db: %w",err)
             }
-            
-            switch {
-            case count == size:
+            if count == size {
                 ps.deleteProxies()
                 log.Println("Service no longer required, exiting now")
                 return nil
-                
-            case inject == 1:
-                ps.injectToxics()
-                log.Println("Toxics injected")
-                
-            case inject == 0:
-                ps.removeToxics()
-                log.Println("Toxics removed")
             }
-            
-            interval := ps.getDynamicInterval(count, size)
-            time.Sleep(interval)
         }
+        time.Sleep(eventPollInterval)
     }
 }
 
 func (ps *ProxyService) Close() {
     ps.cancel()
     ps.db.Close()
+}
+
+func startHealthServer(ctx context.Context) {
+    http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+        w.WriteHeader(http.StatusOK)
+        w.Write([]byte("OK"))
+    })
+    
+    server := &http.Server{Addr: healthCheckPort}
+    
+    go func() {
+        log.Printf("HealthCheckServer running on port %s",healthCheckPort)
+        if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+            log.Printf("Health check server error: %v", err)
+        }
+    }()
+
+    go func() {
+        <-ctx.Done()
+        log.Println("Shutting down health check server...")
+        shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+        defer cancel()
+        server.Shutdown(shutdownCtx)
+    }()
 }
 
 func main() {
@@ -316,7 +475,8 @@ func main() {
     }
     defer ps.Close()
     
-   
+   startHealthServer(ps.ctx)
+
     c := make(chan os.Signal, 1)
     signal.Notify(c, os.Interrupt, syscall.SIGTERM)
     
