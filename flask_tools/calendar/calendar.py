@@ -1,5 +1,4 @@
 from flask import Flask, request, jsonify
-import os
 from datetime import datetime
 import random
 import uuid
@@ -7,12 +6,7 @@ import uuid
 
 app = Flask(__name__)
 
-try:
-    ERROR_PROB = float(os.getenv("ERROR_PROB", "0.1"))
-    if not (0.0 <= ERROR_PROB <= 1.0):
-        ERROR_PROB = 0.1
-except ValueError:
-    ERROR_PROB = 0.1
+
 
 processed_requests = set()
 EVENTS = []
@@ -22,8 +16,6 @@ def generate_id():
 
 @app.route("/events", methods=["GET"])
 def list_events():
-    if random.random()<ERROR_PROB :
-        return jsonify({"message":"internal server error"}),500
     date = request.args.get("date","").strip()
     if date:
         try:

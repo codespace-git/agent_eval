@@ -1,16 +1,10 @@
 from flask import Flask, request, jsonify
-import os
 import random
 
 
 app = Flask(__name__)
 
-try:
-    ERROR_PROB = float(os.getenv("ERROR_PROB", "0.1"))
-    if not (0.0 <= ERROR_PROB <= 1.0):
-        ERROR_PROB = 0.1
-except ValueError:
-    ERROR_PROB = 0.1
+
 
 def generate_link(query):
     if not query:
@@ -22,8 +16,6 @@ def generate_link(query):
 
 @app.route("/serp", methods=["GET"])
 def serp_mock():
-    if random.random() < ERROR_PROB :
-        return jsonify({"message":"internal server error"}),500
     query = request.args.get("q","").strip()
     
     if not query:

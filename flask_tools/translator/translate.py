@@ -1,5 +1,4 @@
 from flask import Flask, request, jsonify
-import os
 from deep_translator import GoogleTranslator
 import random
 import uuid
@@ -8,19 +7,11 @@ processed_requests = set()
 
 app = Flask(__name__)
 
-try:
-    ERROR_PROB = float(os.getenv("ERROR_PROB", "0.1"))
-    if not (0.0 <= ERROR_PROB <= 1.0):
-        ERROR_PROB = 0.1
-except ValueError:
-    ERROR_PROB = 0.1
+
 
 
 @app.route("/translate", methods=["POST"])
 def translate():
-    if random.random()<ERROR_PROB:
-        return jsonify({"messsage":"internal servor error"}),500
-
     data = request.get_json()
     if not data:
         return jsonify({"warning":"no input data found"}),400
