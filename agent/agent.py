@@ -89,8 +89,11 @@ def generate_request_id() -> str:
 
 def get_proxy_status(tool_name):
     try:
-        response = requests.get(f"http://toxiproxy:{PROXY[tool_name]}/", timeout=10)
+        response = requests.get(f"http://toxiproxy:{PROXY[tool_name]}/", timeout=5)
         return response.status_code == 200
+    except (requests.exceptions.Timeout,requests.exceptions.ConnectionError) as e:
+        info_logger.error(f"Tool {tool_name} not responding in time")
+        return False
     except Exception as e:
         info_logger.error(f"Error checking status of {tool_name}: {str(e)}")
         return False
@@ -100,33 +103,35 @@ def proxy_mgr_status(param = None):
     try:
         response = requests.get(f"http://proxy_mgr:8000/health",timeout = 5)
         return response.status_code==200
+   
     except Exception as e:
         info_logger.error(f"Error checking status of proxy mgr: {str(e)}")
         return False
 
 
 def active(status,wait,interval,tool_name = None):
+    if status(tool_name): 
+        return True
+        
     wait_time = 0
-    if not status(tool_name):
-        wait_time = 0
-        info_logger.error(f"{tool_name} Proxy is down,waiting for maximum of {wait}s to restart")
-                
-        while(wait_time < wait):
-            if not status(tool_name):
-                if wait_time + interval <= wait:
-                    sleep_interval = interval
-                    wait_time += interval
-                else:
-                    sleep_interval = wait - wait_time
-                    wait_time = wait
-                time.sleep(sleep_interval)
-
+    info_logger.error(f"{tool_name} Proxy is down,waiting for maximum of {wait}s to restart")
+    
+    while wait_time < wait:
+        if wait_time + interval <= wait:
+            sleep_interval = interval
+            wait_time += interval
+        else:
+            sleep_interval = wait - wait_time
+            wait_time = wait
+        
+        time.sleep(sleep_interval)
+        
+        if status(tool_name):  
             info_logger.info(f"{tool_name} Proxy is up after {wait_time}s,continuing with proxy")
             return True
-
-        if wait_time == wait:
-            info_logger.info(f"{tool_name} Proxy remains unreachable")
-            return False
+    
+    info_logger.info(f"{tool_name} Proxy remains unreachable")
+    return False
 
 
 
@@ -165,7 +170,7 @@ def update_inject_with_smart_wait(db_manager: AgentDataBaseManager, prob: float)
     inject_prev = inject_next
     fail_count = 0
 
-    for _ in range(3):
+    for i in range(3):
         try:
             db_manager.update_inject_state(inject_prev,inject_next,fail_count)
             break
@@ -199,7 +204,7 @@ def call_service_directly(tool_name, endpoint, method, params=None, json_data=No
         
         return {
             "result":res.json(),
-            "status":500
+            "status":503
         }
         
     except Exception as e:
@@ -209,7 +214,7 @@ def call_service_directly(tool_name, endpoint, method, params=None, json_data=No
             "message":f"Direct fallback failed after {attempts} tool level-network tries for {tool_name}:{str(e)}"
             },indent=2, ensure_ascii=False))
 
-        return {"result":f"Both proxy and direct access failed for {tool_name}","status": 503}
+        return {"result":f"Both proxy and direct access failed for {tool_name}","status": 500}
 
 
 
@@ -254,7 +259,7 @@ def call_with_toxic(tool_name, endpoint, method="GET", params=None, json_data=No
             network_start = datetime.fromisoformat(start)
             network_latency = (network_end - network_start).total_seconds()
             total_attempts = (tool_limit*prompt_attempt)+tool_attempts + 1
-            proxy_status[tool_name] = True
+            
 
             info_logger.info(json.dumps({
                 "tool":tool_name,
@@ -287,7 +292,6 @@ def call_with_toxic(tool_name, endpoint, method="GET", params=None, json_data=No
                 
         except Exception as e:
             info_logger.error(f"{str(e)},Using direct fallback")
-            proxy_status[tool_name] = False
             return call_service_directly(tool_name, endpoint, method, params, json_data,tool_attempts)
 
         
