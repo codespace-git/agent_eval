@@ -5,17 +5,19 @@ import re
 import uuid
 import logging
 import requests
+import time
 
 
 from langchain.agents import AgentExecutor
 from langchain.agents.structured_chat.base import create_structured_chat_agent
-from langchain_core.tools import Tool,StructuredTool
+from langchain_core.tools import Tool, StructuredTool
 from langchain_groq import ChatGroq
 from langchain import hub
 
-from dbmanager import AgentDataBaseManager
 from datetime import datetime
-from pydantic import BaseModel,ValidationError,Field
+from pydantic import BaseModel, ValidationError, Field
+from dbmanager import AgentDataBaseManager
+
 
 
 os.makedirs("logs", exist_ok=True)
@@ -42,6 +44,36 @@ PROXY ={
     "message": "6005",
 }
 
+services = {
+        "search": "search_tool:5000",
+        "weather": "weather_tool:5001", 
+        "movie": "movie_tool:5002",
+        "calendar": "calendar_tool:5003",
+        "calculator": "calculator_tool:5004",
+        "message": "message_tool:5005",
+        "translator": "translator_tool:5006"
+    }
+
+inject_prev = 0
+inject_next = 0
+fail_count = 0
+
+
+PROXY_CHECK_INTERVAL = 3
+PROXY_WAIT = 30
+PROXY_MGR_WAIT = 40
+
+def get_env_var(key, default, cast_fn):
+    try:
+        return cast_fn(os.getenv(key, str(default)))
+    except ValueError:
+        return default
+
+TOXIC_PROB = get_env_var("TOXIC_PROB", 0.1, float)
+TOOL_LIMIT = get_env_var("TOOL_LIMIT", 1, int)
+PROMPT_LIMIT = get_env_var("PROMPT_LIMIT", 1, int)
+error_prob = get_env_var("ERROR_PROB",0.1,float)
+
 class ToolLimitReachedException(Exception):
     def __init__(self, status_code,start_time,end_time,message):
         self.status_code = status_code
@@ -50,24 +82,166 @@ class ToolLimitReachedException(Exception):
         self.message = message
         super().__init__(message)
 
+
+def generate_request_id() -> str:
+    return str(uuid.uuid4())
+
+
+def get_proxy_status(tool_name):
+    try:
+        response = requests.get(f"http://toxiproxy:{PROXY[tool_name]}/", timeout=10)
+        return response.status_code == 200
+    except Exception as e:
+        info_logger.error(f"Error checking status of {tool_name}: {str(e)}")
+        return False
+   
+
+def proxy_mgr_status(param = None):
+    try:
+        response = requests.get(f"http://proxy_mgr:8000/health",timeout = 5)
+        return response.status_code==200
+    except Exception as e:
+        info_logger.error(f"Error checking status of proxy mgr: {str(e)}")
+        return False
+
+
+def active(status,wait,interval,tool_name = None):
+    wait_time = 0
+    if not status(tool_name):
+        wait_time = 0
+        info_logger.error(f"{tool_name} Proxy is down,waiting for maximum of {wait}s to restart")
+                
+        while(wait_time < wait):
+            if not status(tool_name):
+                if wait_time + interval <= wait:
+                    sleep_interval = interval
+                    wait_time += interval
+                else:
+                    sleep_interval = wait - wait_time
+                    wait_time = wait
+                time.sleep(sleep_interval)
+
+            info_logger.info(f"{tool_name} Proxy is up after {wait_time}s,continuing with proxy")
+            return True
+
+        if wait_time == wait:
+            info_logger.info(f"{tool_name} Proxy remains unreachable")
+            return False
+
+
+
+def update_inject_with_smart_wait(db_manager: AgentDataBaseManager, prob: float):
+    
+    global inject_prev, inject_next, fail_count
+    
+    if not active(proxy_mgr_status,PROXY_MGR_WAIT,PROXY_CHECK_INTERVAL):
+        return
+
+    row = db_manager.get_inject_state()
+    if row:
+        inject_prev,inject_next,fail_count = row
+    else:
+        inject_prev,inject_next,fail_count = 0,0,0
+   
+
+    if fail_count == 0:
+        inject_next = int(random.random() < prob)
+        db_manager.update_network_inject(inject_next)
+        
+    if inject_next == inject_prev:
+        time.sleep(0.05)
+    else:
+        wait_times = [0.2,0.4,0.6,0.8,1.0]
+        for wait in wait_times :
+            time.sleep(wait)
+            try:
+                no_pending_events = db_manager.fetch_event_status()
+                if no_pending_events:
+                    time.sleep(0.05)
+                    break
+            except:
+                pass
+
+    inject_prev = inject_next
+    fail_count = 0
+
+    for _ in range(3):
+        try:
+            db_manager.update_inject_state(inject_prev,inject_next,fail_count)
+            break
+        except Exception as e:
+            info_logger.error(f"attempt {i+1}:Database error in updating injection state: {str(e)},retry with new transaction")
+            time.sleep(0.02)
+            
+    
+
+def call_service_directly(tool_name, endpoint, method, params=None, json_data=None,attempts = 0):
+    
+    if tool_name not in services:
+        return {"result": f"No direct fallback available for {tool_name}", "status": 504}
+    
+    direct_url = f"http://{services[tool_name]}{endpoint}"
+    
+    try:
+       
+        if method == "GET":
+            res = requests.get(direct_url, params=params or {}, timeout=5)
+        elif method == "POST":
+            res = requests.post(direct_url, json=json_data or {}, timeout=5)
+        elif method == "DELETE":
+            res = requests.delete(direct_url, params=params or {}, timeout=5)
+            
+        info_logger.info(json.dumps({
+            "fallback_used": True,
+            "direct_url": direct_url,
+            "message":f"tool {tool_name} fall_back after {attempts} tool level-network tries"
+        }, indent=2, ensure_ascii=False))
+        
+        return {
+            "result":res.json(),
+            "status":500
+        }
+        
+    except Exception as e:
+        info_logger.error(json.dumps({
+            "fallback_used": True,
+            "direct_url": direct_url,
+            "message":f"Direct fallback failed after {attempts} tool level-network tries for {tool_name}:{str(e)}"
+            },indent=2, ensure_ascii=False))
+
+        return {"result":f"Both proxy and direct access failed for {tool_name}","status": 503}
+
+
+
 def call_with_toxic(tool_name, endpoint, method="GET", params=None, json_data=None):
+    
+    if not active(get_proxy_status,PROXY_WAIT,PROXY_CHECK_INTERVAL,tool_name):
+        raise Exception(f"tool {tool_name} failure")
+
+    if random.random() < error_prob:
+        raise Exception(f"simulating tool {tool_name} failure")
+
     proxy = PROXY[tool_name]
     url = f"http://toxiproxy:{proxy}{endpoint}"
     tool_attempts = 0
-    db_manager = AgentDatabaseManager("state/state.db","network.db")
+    tool_limit = TOOL_LIMIT
+    prompt_limit = PROMPT_LIMIT
+    prob = TOXIC_PROB
+
+    db_manager = AgentDataBaseManager("state/state.db","network.db")
     row = db_manager.get_network_state()
     
     if row:
-        tool_limit, prompt_limit,prompt_attempt,prob,start = row
+        prompt_attempt,start = row
         if not start:
             start = datetime.now().isoformat()
             db_manager.update_network_start(start)
     else:
-        tool_limit, prompt_limit,prompt_attempt,prob, start = 1, 1 ,0, 0.1,datetime.now().isoformat()
+        prompt_attempt,start = 0,datetime.now().isoformat()
 
     while tool_attempts < tool_limit:
         try:
-                 
+            
             if method == "GET":
                 res = requests.get(url, params=params or {}, timeout=5)
             elif method == "POST":
@@ -75,10 +249,12 @@ def call_with_toxic(tool_name, endpoint, method="GET", params=None, json_data=No
             elif method == "DELETE":
                 res = requests.delete(url, params=params or {}, timeout=5)
 
+
             network_end = datetime.now()
             network_start = datetime.fromisoformat(start)
             network_latency = (network_end - network_start).total_seconds()
             total_attempts = (tool_limit*prompt_attempt)+tool_attempts + 1
+            proxy_status[tool_name] = True
 
             info_logger.info(json.dumps({
                 "tool":tool_name,
@@ -98,7 +274,7 @@ def call_with_toxic(tool_name, endpoint, method="GET", params=None, json_data=No
         except (requests.exceptions.Timeout,requests.exceptions.ConnectionError) as e:
             tool_attempts += 1
             
-            if tool_attempts >= tool_limit:
+            if tool_attempts >= tool_limit :
                 return {"result": "Tool limit exceeded", "status": 600}
 
             if isinstance(e, requests.exceptions.Timeout):
@@ -106,25 +282,27 @@ def call_with_toxic(tool_name, endpoint, method="GET", params=None, json_data=No
             elif isinstance(e,requests.exceptions.ConnectionError):
                 info_logger.error(f"Connection aborted with {tool_name} at endpoint {endpoint} after {tool_attempts} tool attempts in {prompt_attempt} prompt attempts")
 
-            db_manager.update_control_inject(int(random.random() < prob))
+            update_inject_with_smart_wait(db_manager,prob)
             continue
                 
         except Exception as e:
-            info_logger.error(f"{tool_name} failed: {str(e)}")
-            return {"result": str(e),"status":500}
+            info_logger.error(f"{str(e)},Using direct fallback")
+            proxy_status[tool_name] = False
+            return call_service_directly(tool_name, endpoint, method, params, json_data,tool_attempts)
+
         
         
-
-
-
 class EventSchema(BaseModel):
     title: str = Field(description="title of the event")
     date : str = Field(description = "date of the event in YYYY-MM-DD format",pattern=r"^\d{4}-\d{2}-\d{2}$")
     time : str = Field(description = "time of event commencement in HH:MM(24 hour)format",pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
-    request_id : str = Field(default_factory=lambda: str(uuid.uuid4()), description="unique identifier for the request")
+    request_id : str = Field(default_factory= generate_request_id, description="unique identifier for the request automatically generated")
 def event_method(input:EventSchema):
     return call_with_toxic("calendar", "/events",method = "POST",json_data=input.dict())
 add_event = StructuredTool.from_function(name="add_event",func=event_method,description="add a calendar event.",args_schema = EventSchema)
+
+
+
 
 
 
@@ -132,10 +310,11 @@ class TranslateSchema(BaseModel):
     text:str = Field(description = "text to be translated")
     source_language:str = Field(description="language of the input text")
     target_language:str = Field(description ="language to which the text is to be translated")
-    request_id: str = Field(default_factory=lambda: str(uuid.uuid4()), description="unique identifier for the request")
+    request_id: str = Field(default_factory= generate_request_id, description="unique identifier for the request automatically generated")
 def translate_method(input:TranslateSchema):
     return call_with_toxic("translator", "/translate", method="POST", json_data=input.dict())
 translate = StructuredTool.from_function(name="translate",func=translate_method,description="Translate text from one language to another.",args_schema=TranslateSchema)
+
 
 
 
@@ -149,13 +328,16 @@ calculate_expr = StructuredTool.from_function(name="calculate_expr",func = calcu
 
 
 
+
 class MessageSchema(BaseModel):
     to : str = Field(description="name of the person to send message to")
     body : str =Field(description="content of the message")
-    request_id: str = Field(default_factory=lambda: str(uuid.uuid4()), description="unique identifier for the request")
+    request_id: str = Field(default_factory=generate_request_id, description="unique identifier for the request automatically generated")
 def message_method(input:MessageSchema):
     return call_with_toxic("message", "/message", method="POST", json_data=input.dict())
 send_message = StructuredTool.from_function(name="send_message",description="Send a message to someone.",func=message_method,args_schema=MessageSchema)
+
+
 
 
 
@@ -169,36 +351,55 @@ def search_movie_method(input: SearchMovieSchema):
 search_movie = StructuredTool.from_function(name="search_movie",func=search_movie_method,description="Search for a movie.",args_schema=SearchMovieSchema)
 
 
+
+
+def search_web_method(query:str):
+    return call_with_toxic("search", "/serp", params={"q": query})
+
+def get_weather_method(city: str):
+    return call_with_toxic("weather", "/weather", params={"q": city})
+
+def delete_event_by_date_method(date: str):
+    return call_with_toxic("calendar", "/events", method="DELETE", params={"date": date, "request_id": generate_request_id})
+
+def get_event_method(date: str):
+    return call_with_toxic("calendar", "/events", params={"date": date})
+
+def get_inbox_message_method():
+    return call_with_toxic("message","/inbox")
+
+
+
 TOOLS = [
     Tool(
         name="search_web",
-        func=lambda query: call_with_toxic("search", "/serp", params={"q": query}),
-        description="Search the internet for information."
+        func= search_web_method,
+        description="Search the internet for information. Provide a search query string as the 'query' parameter to find relevant web content."
     ),
     Tool(
         name="get_weather",
-        func=lambda city: call_with_toxic("weather", "/weather", params={"q": city}),
-        description="Get current weather for a city."
+        func= get_weather_method,
+        description="Get current weather for a city. Provide the city name as the 'city' parameter (e.g., 'New York', 'London')."
     ),
     search_movie,
     add_event,
     Tool(
         name="delete_event_by_date",
-        func=lambda date: call_with_toxic("calendar", "/events", method="DELETE", params={"date": date, "request_id": str(uuid.uuid4())}),
-        description="Delete all events on a date,use and send unique request id."
+        func= delete_event_by_date_method,
+        description="Delete all events on a date,use and send unique request id. Provide the date as the 'date' parameter in YYYY-MM-DD format. A unique request ID is automatically generated."
     ),
     Tool(
         name="get_event",
-        func= lambda date :call_with_toxic("calendar","/events",params={"date":date}),
-        description="Get all events on a calendar date."
+        func= get_event_method,
+        description="Get all events on a calendar date. Provide the date as the 'date' parameter in YYYY-MM-DD format."
     ),
     translate,
     calculate_expr,
     send_message,
     Tool(
         name = "get_inbox_message",
-        func=lambda:call_with_toxic("message","/inbox"),
-        description="Get messages from inbox."
+        func= send_message_method,
+        description="Get messages from inbox. No input parametrer required."
     )
 ]
 
@@ -206,7 +407,7 @@ TOOLS = [
 def create_dbs(db_manager:AgentDataBaseManager):
     os.makedirs("state", exist_ok=True)
     os.makedirs("network",exist_ok = True)
-    db_manager._init_dbs()
+    db_manager.init_dbs()
 
 def classifier(status:int):
         if 400<=status<500 :
@@ -250,11 +451,11 @@ def log_agent_response(log_level, prompt, response, status, start_time, end_time
         agent_logger.error(log_message)
 
 
-def response_handler(agent_executor: AgentExecutor, prompt: str, prob:float,db_manager:AgentDatabaseManager):
+def response_handler(agent_executor: AgentExecutor, prompt: str, prob:float,db_manager:AgentDataBaseManager):
     state = True
     row = db_manager.get_network_state()
     if row:
-        attempt_no = row[2] + 1
+        attempt_no = row[0] + 1
     else:
         attempt_no = 1
 
@@ -316,29 +517,17 @@ def response_handler(agent_executor: AgentExecutor, prompt: str, prob:float,db_m
         log_agent_response(logging.ERROR, prompt, str(e),"agent error" ,prompt_start, prompt_end, duration, "agent", attempt_no)
 
     finally:
-        db_manager.update_control_inject(int(random.random() < prob))
-        return state
+       update_inject_with_smart_wait(db_manager,prob)
+       return state
         
-def exit_helper(db_manager: AgentDatabaseManager):
-    db_manager.update_control_inject(1)
+def exit_helper(db_manager: AgentDataBaseManager):
+    db_manager.signal_exit()
     exit(1)
-
-def get_env_var(key, default, cast_fn):
-    try:
-        return cast_fn(os.getenv(key, str(default)))
-    except ValueError:
-        return default
 
 def main():
 
-    db_manager = AgentDatabaseManager("state/state.db","network.db")
+    db_manager = AgentDataBaseManager("state/state.db","network.db")
     create_dbs(db_manager)
-    
-
-    toxic_prob = get_env_var("TOXIC_PROB", 0.1, float)
-    tool_limit = get_env_var("TOOL_LIMIT", 1, int)
-    prompt_limit = get_env_var("PROMPT_LIMIT", 1, int)
-
     
     api_key = os.getenv("GROQ_API_KEY",None)
     if not api_key:
@@ -364,15 +553,16 @@ def main():
 
     succ_count = 0
     count = 0
+   
 
     db_manager.set_data_size(len(prompts))
-    db_manager.update_control_inject(int(random.random() < toxic_prob))
-    db_manager.set_network_config(tool_limit, prompt_limit, toxic_prob)
+    update_inject_with_smart_wait(db_manager,int(random.random() < TOXIC_PROB))
+    db_manager.set_network_config(TOOL_LIMIT, PROMPT_LIMIT, TOXIC_PROB)
     
     overall_start = datetime.now()
 
     for i, item in enumerate(prompts):
-        prompt = item.get("prompt")       
+        prompt = item.get("prompt")   
         if not prompt :
             info_logger.error(f"Prompt is missing in the item at index{i},Skipping this item.")
             continue
@@ -380,17 +570,17 @@ def main():
             info_logger.error(f"Prompt in the item at index {i} is not a string,Skipping this item.")
             continue    
         count += 1
-        for attempt in range(prompt_limit):
+        for attempt in range(PROMPT_LIMIT):
             try:
-                if response_handler(agent_executor, prompt, toxic_prob, db_manager):
+                if response_handler(agent_executor, prompt, TOXIC_PROB, db_manager):
                     succ_count += 1
                 break
             except ToolLimitReachedException as e:
-                if attempt == prompt_limit - 1:         
+                if attempt == PROMPT_LIMIT - 1:         
                     duration = (e.end_time - e.start_time).total_seconds() if e.start_time and e.end_time else 0
                     start_time = e.start_time if e.start_time else None
                     end_time = e.end_time if e.end_time else None
-                    log_agent_response(logging.ERROR,prompt,"",600,start_time,end_time,duration,"network",prompt_limit)
+                    log_agent_response(logging.ERROR,prompt,"",600,start_time,end_time,duration,"network",PROMPT_LIMIT)
                     break
                 else:
                     db_manager.update_prompt_attempt(attempt + 1)
@@ -406,8 +596,10 @@ def main():
         "processed_count": count,
         "success_count": succ_count
         }, indent=2, ensure_ascii=False))
-        
-    db_manager.update_control_count(len(prompts))
+
+        time.sleep(0.01)
+
+    db_manager.signal_exit()
 
     overall_stop = datetime.now()
     total_duration = (overall_stop - overall_start).total_seconds()
@@ -420,9 +612,9 @@ def main():
         "# of requests processed":count,
         "# of requests recieved":len(prompts),
         "configuration": {
-            "toxic_probability": toxic_prob,
-            "tool_limit": tool_limit,
-            "prompt_limit": prompt_limit
+            "toxic_probability": TOXIC_PROB,
+            "tool_limit": TOOL_LIMIT,
+            "prompt_limit": PROMPT_LIMIT
         }
     },indent=2,ensure_ascii=False))
 
