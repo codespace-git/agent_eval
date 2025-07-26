@@ -11,7 +11,8 @@ import (
     "context"
     "fmt"
     "net/http"
-    
+    "sync"
+
     toxiproxy "github.com/Shopify/toxiproxy/v2/client"
     _ "modernc.org/sqlite"
 )
@@ -48,6 +49,7 @@ type ProxyService struct {
     db     *sql.DB
     ctx    context.Context
     cancel context.CancelFunc
+    closeOnce sync.Once
 }
 
 type Event struct {
@@ -416,6 +418,13 @@ func (ps *ProxyService) Close() {
     ps.cancel()
     ps.db.Close()
 }
+func (ps *ProxyService) Exit(code int) {
+    
+    ps.closeOnce.Do(func(){
+    ps.Close()
+    os.Exit(code)
+    })
+}
 
 func startHealthServer(ctx context.Context) {
     http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -445,9 +454,7 @@ func main() {
     ps, err := NewProxyService()
     if err != nil {
         log.Fatalf("Failed to create proxy service: %v", err)
-        os.Exit(1)
     }
-    defer ps.Close()
     
    startHealthServer(ps.ctx)
 
@@ -457,14 +464,13 @@ func main() {
     go func() {
         sig := <-c
         log.Println("Received shutdown signal")
-        ps.Close()
-        os.Exit(0)
+        ps.Exit(0)
     }()
     
     errorinstances := 0
     if err := ps.Run(); err != nil {
-        log.Fatalf("Proxy service failed: %v", err)
-        os.Exit(1)
+        log.Printf("Proxy service failed: %v", err)
+        ps.Exit(1)
     }
-    os.Exit(0)
+    ps.Exit(0)
 }
