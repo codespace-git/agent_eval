@@ -3,7 +3,6 @@ import json
 
 def create_loggers(dir):
    
-
     info_logger = logging.getLogger("info")
     info_handler = logging.FileHandler(f"{dir}/info.log")
     info_logger.setLevel(logging.INFO)
@@ -64,7 +63,7 @@ def log_direct_service_call(logger, tool_name, endpoint, direct_url, attempts, p
         }
         logger.error(json.dumps(log_data, indent=2, ensure_ascii=False))
 
-def log_agent_response(logger, log_level, prompt, response, status, start_time = "", end_time = "", duration, error_type, attempt_no):
+def log_agent_response(logger, log_level, prompt, response, status, start_time, end_time, duration, error_type, attempt_no):
 
     log_data = {
         "prompt": prompt,
