@@ -1,8 +1,7 @@
 from flask import Flask, request, jsonify
 from datetime import datetime
-import random
 import uuid
-
+import random
 
 app = Flask(__name__)
 
@@ -33,8 +32,6 @@ def list_events():
 @app.route("/events", methods=["POST"])
 
 def create_event():
-    if random.random()<ERROR_PROB :
-         return jsonify({"message":"internal server error"}),500
     data = request.get_json()
     if not data:
         return jsonify({"error":"data not found"}),400
@@ -70,8 +67,6 @@ def create_event():
 @app.route("/events", methods=["DELETE"])
 
 def delete_event():
-    if random.random()<ERROR_PROB :
-         return jsonify({"message":"internal server error"}),500
     data = request.args.get("date","").strip()
     request_id = request.args.get("request_id","").strip()
     if not date:

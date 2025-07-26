@@ -40,8 +40,6 @@ def send_message():
 
 @app.route("/inbox", methods=["GET"])
 def inbox():
-    if random.random()<ERROR_PROB :
-         return jsonify({"message":"internal server error"}),500
     if not MESSAGES:
         return jsonify({"messages": "No messages found"}), 200
     return jsonify({"messages": MESSAGES}), 200
