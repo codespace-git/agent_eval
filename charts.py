@@ -60,9 +60,14 @@ def calculate_throughput_and_success(request_data, overall_start):
     if not request_data:
         return [], [], []
     
-    timestamps = [datetime.fromisoformat(item['timestamp']) for item in request_data]
-    processed_counts = [item['processed_count'] for item in request_data]
-    success_counts = [item['success_count'] for item in request_data]
+    for item in request_data:
+        try:
+            timestamp = datetime.fromisoformat(item['timestamp'])
+            timestamps.append(timestamp)
+        except (ValueError, KeyError):
+            continue
+        processed_counts.append(item['processed_count'])
+        success_counts.append(item['success_count'])
     
     start_time = overall_start
     end_time = timestamps[-1] if timestamps else start_time + timedelta(seconds=30)
@@ -77,26 +82,18 @@ def calculate_throughput_and_success(request_data, overall_start):
         bin_end = bins[i + 1]
         bin_center = bin_start + (bin_end - bin_start) / 2
         
+        requests_in_bin = [item for item in request_data 
+                          if bin_start <= datetime.fromisoformat(item['timestamp']) <= bin_end]
         
-        bin_requests = []
-        for j, ts in enumerate(timestamps):
-            if bin_start <= ts < bin_end:
-                bin_requests.append((ts, processed_counts[j], success_counts[j]))
+        throughput = len(requests_in_bin) 
         
-        if bin_requests:
-           
-            if len(bin_requests) == 1:
-                throughput = 1  
-            else:
-                min_processed = min(pc for _, pc, _ in bin_requests)
-                max_processed = max(pc for _, pc, _ in bin_requests)
-                throughput = max(1, max_processed - min_processed)
-            
-           
-            latest_request = max(bin_requests, key=lambda x: x[1]) 
-            latest_success = latest_request[2]
-            latest_processed = latest_request[1]
-            success_rate = (latest_success / latest_processed * 100) if latest_processed > 0 else 0
+       
+        if requests_in_bin:
+            total_processed = sum(item['processed_count'] for item in requests_in_bin)
+            total_successful = sum(item['success_count'] for item in requests_in_bin)
+            success_rate = (total_successful / total_processed * 100) if total_processed > 0 else 0
+
+        
         else:
             throughput = 0
             success_rate = 0
@@ -131,11 +128,12 @@ def create_throughput_chart(request_data, overall_summary, overall_start):
         config = overall_summary.get('configuration', {})
         summary_text = f"""Configuration:
 Toxic Prob: {config.get('toxic_probability', 'N/A')}
+Failure Prob: {config.get('failure_probability', 'N/A')}
 Tool Limit: {config.get('tool_limit', 'N/A')}
 Prompt Limit: {config.get('prompt_limit', 'N/A')}
 
 Results:
-Total Requests: {overall_summary.get('# of requests recieved', 'N/A')}
+Total Requests: {overall_summary.get('# of requests received', 'N/A')}
 Processed: {overall_summary.get('# of requests processed', 'N/A')}
 Successful: {overall_summary.get('# of successful requests', 'N/A')}
 Duration: {overall_summary.get('duration', 0):.2f}s"""

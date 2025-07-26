@@ -1,5 +1,6 @@
 pydantic
 requests
+dotenv
 langchain
 langchain-core
 langchain-groq

@@ -26,16 +26,19 @@ services:
   
   translator_tool:
     build: ./flask_tools/translator
+    
    
   proxy_mgr:
     build: ./Toxiproxy
     volumes:
       - ./state:/app/state 
+    restart: unless-stopped
     depends_on:
       - toxiproxy
 
   agent:
     build: ./agent
+    restart: "no"
     depends_on:
       toxiproxy: 
         condition: service_started
