@@ -155,14 +155,15 @@ func (ps *ProxyService) initializeDatabase() error {
 
 func (ps *ProxyService) createProxies() error {
     for _, cfg := range proxyConfig {
+        if proxy,err:= ps.client.Proxy(cfg.Name);err!=nil && proxy==nil{
         err := ps.retryOperation(func() error {
-            var err error
-            _, err = ps.client.CreateProxy(cfg.Name, cfg.Listen, cfg.Upstream)
+            _, err:= ps.client.CreateProxy(cfg.Name, cfg.Listen, cfg.Upstream)
             return err
         })
         if err != nil {
             return fmt.Errorf("failed to create proxy %s: %w", cfg.Name, err)
         }
+    }
     }
     return nil
 }
@@ -204,11 +205,9 @@ func (ps *ProxyService) getEvents() ([]Event, error) {
         defer rows.Close()
         
         events = nil 
-        var err error
         for rows.Next() {
             var event Event
-            var err error
-            err = rows.Scan(&event.ID, &event.EventType, &event.OldValue, 
+            err := rows.Scan(&event.ID, &event.EventType, &event.OldValue, 
                            &event.NewValue, &event.Timestamp, &event.Processed)
             if err != nil {
                 return err
@@ -241,7 +240,6 @@ func (ps *ProxyService) processEvents() error {
         return nil 
     }   
 
-    var err error
     for _, event := range events {
         if event.Processed == 0 {
             log.Printf("Processing event: %v", event)
@@ -255,10 +253,8 @@ func (ps *ProxyService) processEvents() error {
             default:
                 log.Printf("Unknown event type: %s", event.EventType)
         }
-        var err error
-        err = ps.retryOperation(func() error {
-            var err error
-            _, err = ps.db.Exec("UPDATE events SET processed = 1 WHERE id = ?", event.ID)
+        err := ps.retryOperation(func() error {
+            _, err := ps.db.Exec("UPDATE events SET processed = 1 WHERE id = ?", event.ID)
             return err
         })
         if err != nil {
@@ -266,7 +262,7 @@ func (ps *ProxyService) processEvents() error {
         }
     }
 
-        if err = ps.removeEvents(event.ID); err != nil {
+        if err := ps.removeEvents(event.ID); err != nil {
             log.Printf("Failed to remove event %d: %v", event.ID, err)
         }
         
@@ -321,15 +317,13 @@ func (ps *ProxyService) injectToxics() {
         var err error
         if rand.Intn(2) == 0 {
             err = ps.retryOperation(func() error {
-                var err error
-                _, err = proxy.AddToxic("toxic_timeout_up", "timeout", "upstream", 1.0,
+                _, err := proxy.AddToxic("toxic_timeout_up", "timeout", "upstream", 1.0,
                     toxiproxy.Attributes{"timeout": timeout_up})
                 return err
             })
         } else {
             err = ps.retryOperation(func() error {
-                var err error
-                _, err = proxy.AddToxic("toxic_timeout_down", "timeout", "downstream", 1.0,
+                _, err := proxy.AddToxic("toxic_timeout_down", "timeout", "downstream", 1.0,
                     toxiproxy.Attributes{"timeout": timeout_down})
                 return err
             })
@@ -380,13 +374,11 @@ func (ps *ProxyService) deleteProxies() {
     }
 }
 
-func (ps *ProxyService) Run(var errorcount int) error {
+func (ps *ProxyService) Run() error {
     if err := ps.createProxies(); err != nil {
         return fmt.Errorf("failed to create proxies: %w", err)
     }
-    if errorcount != 0{
-        errorcount = 0
-    }
+    errorcount :=0
     log.Println("Proxy service started successfully")
     
     for {
@@ -400,7 +392,7 @@ func (ps *ProxyService) Run(var errorcount int) error {
             if err := ps.processEvents(); err != nil {
                 log.Printf("Failed to process events: %v", err)
                 errorcount++
-                if errorcount >= maxerrorcount{
+                if errorcount >= maxerrorinstances{
                     ps.deleteProxies()
                     return fmt.Errorf("error limit reached")
                 }
@@ -453,7 +445,7 @@ func main() {
     ps, err := NewProxyService()
     if err != nil {
         log.Fatalf("Failed to create proxy service: %v", err)
-        os.exit(1)
+        os.Exit(1)
     }
     defer ps.Close()
     
@@ -470,9 +462,9 @@ func main() {
     }()
     
     errorinstances := 0
-    if err := ps.Run(errorinstances); err != nil {
+    if err := ps.Run(); err != nil {
         log.Fatalf("Proxy service failed: %v", err)
-        os.exit(1)
+        os.Exit(1)
     }
-    os.exit(0)
+    os.Exit(0)
 }
